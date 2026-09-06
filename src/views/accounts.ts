@@ -1,7 +1,7 @@
 import type { View } from '../app/router';
 import { html, raw, money, onAction, modal, toast, spinner, confirmDialog } from '../app/ui';
 import { db, type Account } from '../store/db';
-import { addAccount, rehomeUnmatched, unmatchedHints, updateAccount } from '../core/accounts';
+import { addAccount, deleteAccount, rehomeUnmatched, unmatchedHints, updateAccount } from '../core/accounts';
 import { settings, saveSettings } from '../store/local';
 import { escapeHtml } from '../core/text';
 import { scanMailbox } from '../core/extract';
@@ -63,6 +63,12 @@ export const accountsView: View = {
         toast(`Added · ${n} alerts attached`, 'ok');
         if (n) categorizeAll().catch(() => {});
       },
+      delete: async (el) => {
+        const a = db.accounts.get(el.dataset.id!)!;
+        if (!(await confirmDialog(`Delete ${a.display_name}? It has no transactions or statements.`, 'Delete'))) return;
+        const r = await deleteAccount(a.id);
+        toast(r === 'deleted' ? 'Deleted' : 'This account has data — hide it instead', r === 'deleted' ? 'ok' : 'error');
+      },
       deactivate: async (el) => {
         const a = db.accounts.get(el.dataset.id!)!;
         if (!(await confirmDialog(`Hide ${a.display_name}? Its transactions stay in the sheet but won't be matched or shown.`, 'Hide'))) return;
@@ -100,7 +106,7 @@ function page(): string {
           </div>
           <button class="btn small" data-action="password" data-id="${a.id}" title="Statement PDF password">🔑</button>
           <button class="btn small" data-action="edit" data-id="${a.id}">Edit</button>
-          ${a.is_active ? `<button class="btn small ghost" data-action="deactivate" data-id="${a.id}">Hide</button>` : `<button class="btn small" data-action="activate" data-id="${a.id}">Show</button>`}
+          ${txnCount(a.id) === 0 && stmtCount(a.id) === 0 ? `<button class="btn small ghost danger" data-action="delete" data-id="${a.id}">Delete</button>` : a.is_active ? `<button class="btn small ghost" data-action="deactivate" data-id="${a.id}" title="Keeps its rows in the sheet but removes them from every number">Hide</button>` : `<button class="btn small" data-action="activate" data-id="${a.id}">Show</button>`}
         </div>`,
       )
       .join('')) : raw('<p class="muted">No accounts yet.</p>')}</div>

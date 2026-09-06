@@ -60,6 +60,21 @@ export function defaultName(kind: AccountKind, institution: string, ref: string)
   return [institution.trim(), what, last4 ? `••${last4}` : ''].filter(Boolean).join(' ');
 }
 
+/**
+ * Delete an account that has no transactions or statements (the sheet row is
+ * blanked, never removed, so row numbers stay stable). Accounts with history
+ * are hidden instead — their rows stay auditable but drop out of every number.
+ */
+export async function deleteAccount(id: string): Promise<'deleted' | 'has_data'> {
+  const used = db.transactions.rows.some((t) => t.account_id === id) || db.statements.rows.some((s) => s.account_id === id);
+  if (used) return 'has_data';
+  db.update(db.accounts, id, { institution: '', display_name: '(deleted)', account_ref: '', statement_sender: '', is_active: false });
+  await db.flush();
+  db.accounts.rows = db.accounts.rows.filter((a) => a.id !== id);
+  db.notify();
+  return 'deleted';
+}
+
 export async function updateAccount(id: string, patch: Partial<Account>): Promise<void> {
   db.update(db.accounts, id, patch);
   await db.flush();

@@ -381,8 +381,10 @@ export class SheetDb {
   activeAccounts(): Account[] {
     return this.accounts.rows.filter((a) => a.is_active);
   }
+  /** Rows that count: not superseded, and not belonging to a hidden account. */
   liveTransactions(): Transaction[] {
-    return this.transactions.rows.filter((t) => t.status !== 'superseded');
+    const hidden = new Set(this.accounts.rows.filter((a) => !a.is_active).map((a) => a.id));
+    return this.transactions.rows.filter((t) => t.status !== 'superseded' && !(t.account_id && hidden.has(t.account_id)));
   }
   sheetUrl(): string {
     return `https://docs.google.com/spreadsheets/d/${this.spreadsheetId}`;
