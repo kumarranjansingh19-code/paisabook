@@ -13,6 +13,8 @@ export function stripHtml(html: string): string {
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<br\s*\/?>|<\/(p|div|tr|li|h\d)>/gi, '\n')
+    // inline tags must not split words or numbers ("298.9<span>9</span>" is 298.99)
+    .replace(/<\/?(?:span|b|strong|i|em|u|font|a|small|sup|sub|mark|abbr)\b[^>]*>/gi, '')
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
