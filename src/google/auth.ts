@@ -131,7 +131,7 @@ export async function gfetchRaw(url: string, init: RequestInit = {}, retries = 8
       const retryAfter = Number(res.headers.get('Retry-After')) || 0;
       // Per-minute quotas reset within 60s: back off up to 20s per attempt (≈2 min total over 8 retries).
       const wait = Math.min(retryAfter ? retryAfter * 1000 : Math.min(1000 * 2 ** attempt, 20_000) + Math.random() * 1000, 30_000);
-      window.dispatchEvent(new CustomEvent('paisabook:ratelimit', { detail: { status: res.status, waitMs: wait, attempt } }));
+      window.dispatchEvent(new CustomEvent('paisabook:ratelimit', { detail: { status: res.status, waitMs: wait, attempt, url } }));
       await new Promise((r, rej) => {
         const t = setTimeout(r, wait);
         init.signal?.addEventListener('abort', () => {

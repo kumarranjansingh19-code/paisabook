@@ -8,6 +8,7 @@ import { db } from '../store/db';
 import { parseSpreadsheetId } from '../google/sheets';
 import { scanMailbox } from '../core/extract';
 import { discoverAccounts, type AccountProposal } from '../core/discover';
+import { discoverHeuristically } from '../core/heuristics';
 import { addAccount } from '../core/accounts';
 import { daysAgoIso, todayIso } from '../core/dates';
 import { escapeHtml } from '../core/text';
@@ -203,16 +204,24 @@ function wire(root: HTMLElement, step: Step): void {
         const scan = await scanMailbox(daysAgoIso(60), todayIso(), {
           reprocess: true,
           metaOnly: true,
+          maxEmails: 1500,
           onProgress: (p) => {
             status.innerHTML = spinner(`${p.phase} ${p.total ? `${p.done}/${p.total}` : ''}${note}`);
             note = '';
           },
         });
-        status.innerHTML = spinner(`AI is reading ${scan.emails.length} emails for account names…`);
-        const proposals = await discoverAccounts(scan.emails);
-        renderProposals(status, proposals);
+        status.innerHTML = spinner(`Looking for account names in ${scan.emails.length} emails…`);
+        let proposals: AccountProposal[];
+        try {
+          proposals = await discoverAccounts(scan.emails);
+        } catch (err) {
+          // AI unavailable (rate limit) — rules alone still give us the known banks
+          proposals = discoverHeuristically(scan.emails).proposals.map((p) => ({ ...p }));
+          toast(`AI step skipped: ${String((err as Error).message).slice(0, 80)}`, 'error');
+        }
+        renderProposals(status, proposals, scan.interrupted ? { read: scan.read, total: scan.total, reason: scan.interrupted } : undefined);
       } catch (err) {
-        status.innerHTML = `<p class="pill bad">${escapeHtml(String((err as Error).message))}</p><p class="small muted">Wait a minute and try again — Gmail limits reads per minute.</p>`;
+        status.innerHTML = `<p class="pill bad">${escapeHtml(String((err as Error).message))}</p><p class="small muted">Wait a minute and press Scan again — it continues from where it stopped.</p>`;
       } finally {
         discovering = false;
         btn.removeAttribute('disabled');
@@ -249,13 +258,17 @@ function wire(root: HTMLElement, step: Step): void {
   void step;
 }
 
-function renderProposals(box: HTMLElement, proposals: AccountProposal[]): void {
+function renderProposals(box: HTMLElement, proposals: AccountProposal[], partial?: { read: number; total: number; reason: string }): void {
+  const banner = partial
+    ? `<div class="card warn small">⏸ Gmail cut the scan short after <strong>${partial.read} of ${partial.total}</strong> emails (${escapeHtml(partial.reason.slice(0, 80))}).
+        Here's what was found so far. <button class="btn small" data-action="discover">Continue scanning from there</button> or add these and move on.</div>`
+    : '';
   if (!proposals.length) {
-    box.innerHTML = `<p class="muted">No bank or card emails found in the last 60 days. Add accounts manually.</p>
+    box.innerHTML = `${banner}<p class="muted">No bank or card emails found${partial ? ' yet' : ' in the last 60 days'}. Add accounts manually.</p>
       <div class="row"><button class="btn" data-action="add-manual">Add manually</button><button class="btn primary" data-action="skip-accounts">Continue</button></div>`;
     return;
   }
-  box.innerHTML = `<div class="stack">${proposals
+  box.innerHTML = `${banner}<div class="stack">${proposals
     .map(
       (p) => `<label class="check"><input type="checkbox" checked data-proposal='${escapeHtml(JSON.stringify(p))}' />
         <span><strong>${escapeHtml(p.institution)}</strong> ${p.kind === 'credit_card' ? 'card' : 'account'} ${p.last4 ? `••${p.last4}` : ''}

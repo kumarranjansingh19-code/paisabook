@@ -6,6 +6,7 @@ import { escapeHtml } from '../core/text';
 import { daysAgoIso, todayIso } from '../core/dates';
 import { categorizeAll } from '../core/categorize';
 import { usage } from '../llm/gemini';
+import { scanCheckpoint } from '../core/extract';
 
 let period = defaultPeriod(3);
 
@@ -104,13 +105,21 @@ function status(): string {
     .join(' ');
   return `
     <div class="row" style="margin:.6rem 0">
-      ${s.running ? `<button class="btn danger" data-action="stop">Stop</button><span class="spinner"></span> <span>${escapeHtml(s.phase)}${p && p.total ? ` ${p.done}/${p.total}` : ''}${p?.note ? ` · ${escapeHtml(p.note)}` : ''}</span>` : `<button class="btn primary" data-action="run">Sync ${period.from} → ${period.to}</button>`}
+      ${s.running ? `<button class="btn danger" data-action="stop">Stop</button><span class="spinner"></span> <span>${escapeHtml(s.phase)}${p && p.total ? ` ${p.done}/${p.total}` : ''}${p?.note ? ` · ${escapeHtml(p.note)}` : ''}</span>` : `<button class="btn primary" data-action="run">${resumeLabel()}</button>`}
     </div>
     ${bar}
     ${summary ? `<p>${summary}</p>` : ''}
     ${s.error ? `<p class="pill bad">${escapeHtml(s.error)}</p>` : ''}
     ${s.log.length ? `<div class="log">${s.log.map(escapeHtml).join('\n')}</div>` : ''}
     ${usage.calls ? `<p class="muted small">AI usage this session: ${usage.calls} calls · ${Math.round(usage.inputTokens / 1000)}k in / ${Math.round(usage.outputTokens / 1000)}k out tokens</p>` : ''}`;
+}
+
+function resumeLabel(): string {
+  const ck = scanCheckpoint();
+  if (ck && ck.from === period.from && ck.to === period.to && ck.metas.length && ck.metas.length < ck.ids.length) {
+    return `Resume sync (${ck.metas.length}/${ck.ids.length} headers read)`;
+  }
+  return `Sync ${period.from} → ${period.to}`;
 }
 
 function queue(): string {

@@ -53,38 +53,150 @@ export interface ScanResult {
   candidates: number;
   alreadyDone: number;
   emails: FetchedEmail[]; // full bodies of candidates (for discovery + processing)
+  /** headers read so far / headers to read — equal when the scan completed */
+  read: number;
+  total: number;
+  /** set when Gmail cut the scan short; what was read is returned and checkpointed for a resume */
+  interrupted?: string;
 }
 
-/** List → metadata → prefilter → full bodies for candidates not yet processed. */
+/**
+ * Scan checkpoint: the message ids for a period plus every header read so
+ * far. Kept on the device until the same scan completes, so a run that
+ * Gmail cuts short continues from the last batch instead of starting over.
+ */
+export interface ScanCheckpoint {
+  key: string;
+  from: string;
+  to: string;
+  ids: string[];
+  metas: EmailMeta[];
+  savedAt: string;
+}
+const CK_KEY = 'paisabook.scan.v1';
+
+export function scanCheckpoint(): ScanCheckpoint | null {
+  try {
+    const raw = localStorage.getItem(CK_KEY);
+    return raw ? (JSON.parse(raw) as ScanCheckpoint) : null;
+  } catch {
+    return null;
+  }
+}
+export function clearScanCheckpoint(): void {
+  try {
+    localStorage.removeItem(CK_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+function saveCheckpoint(ck: ScanCheckpoint): void {
+  try {
+    localStorage.setItem(CK_KEY, JSON.stringify({ ...ck, savedAt: new Date().toISOString() }));
+  } catch {
+    /* quota — the scan still works, just without resume */
+  }
+}
+export function scanKey(from: string, to: string, broad?: boolean, reprocess?: boolean): string {
+  return `${from}|${to}|${broad ? 1 : 0}|${reprocess ? 1 : 0}`;
+}
+
+const isAbort = (err: unknown) => (err as Error)?.name === 'AbortError';
+
+/**
+ * List → metadata → prefilter → full bodies for candidates not yet processed.
+ * Never throws on a rate limit after listing: returns what it read, with
+ * `interrupted` set, and leaves a checkpoint so the next call resumes.
+ */
 export async function scanMailbox(
   from: string,
   to: string,
-  opts: { reprocess?: boolean; broad?: boolean; /** headers + snippet only (account discovery) — 1 read per email, no bodies */ metaOnly?: boolean; onProgress?: (p: ScanProgress) => void; signal?: AbortSignal } = {},
+  opts: {
+    reprocess?: boolean;
+    broad?: boolean;
+    /** headers + snippet only (account discovery) — 1 read per email, no bodies */
+    metaOnly?: boolean;
+    /** newest-first cap on how many emails to read (discovery doesn't need the whole period) */
+    maxEmails?: number;
+    onProgress?: (p: ScanProgress) => void;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<ScanResult> {
   const p = opts.onProgress ?? (() => {});
-  p({ phase: 'Listing mail', done: 0, total: 0 });
-  const ids = await listMessageIds(buildQuery(from, to, opts.broad), 8000, opts.signal);
+  const key = scanKey(from, to, opts.broad, opts.reprocess);
+  let ck = scanCheckpoint();
+  if (ck && ck.key !== key) ck = null;
+
+  let ids: string[];
+  if (ck) {
+    ids = ck.ids;
+  } else {
+    p({ phase: 'Listing mail', done: 0, total: 0 });
+    ids = await listMessageIds(buildQuery(from, to, opts.broad), opts.maxEmails ?? 8000, opts.signal);
+    ck = { key, from, to, ids, metas: [], savedAt: '' };
+    saveCheckpoint(ck);
+  }
   const fresh = opts.reprocess ? ids : ids.filter((id) => !db.emails.has(id));
-  p({ phase: 'Reading headers', done: 0, total: fresh.length, note: `${ids.length} emails in range, ${ids.length - fresh.length} already processed` });
-  const metas = await fetchMetas(fresh, (n) => p({ phase: 'Reading headers', done: n, total: fresh.length }), opts.signal);
+  const have = new Map(ck.metas.map((m) => [m.id, m]));
+  const remaining = fresh.filter((id) => !have.has(id));
+  const already = fresh.length - remaining.length;
+  p({ phase: 'Reading headers', done: already, total: fresh.length, note: `${ids.length} emails in range${already ? `, resuming after ${already}` : ''}` });
+
+  let interrupted: string | undefined;
+  let lastSave = Date.now();
+  try {
+    await fetchMetas(remaining, {
+      signal: opts.signal,
+      onBatch: (ms) => {
+        for (const m of ms) have.set(m.id, m);
+        if (Date.now() - lastSave > 2500) {
+          ck!.metas = [...have.values()];
+          saveCheckpoint(ck!);
+          lastSave = Date.now();
+        }
+      },
+      onProgress: (n) => p({ phase: 'Reading headers', done: already + n, total: fresh.length }),
+    });
+  } catch (err) {
+    if (isAbort(err)) throw err;
+    interrupted = String((err as Error).message ?? err);
+  }
+  ck.metas = [...have.values()];
+  saveCheckpoint(ck);
+  const metas = fresh.map((id) => have.get(id)).filter((m): m is EmailMeta => !!m);
+
   // Anything that never gets a full read is logged as skipped so we don't re-read it next time.
   const skipped: EmailLog[] = [];
-  const candidateIds: string[] = [];
   const candidates: EmailMeta[] = [];
   for (const m of metas) {
-    if (looksFinancial(m)) {
-      candidateIds.push(m.id);
-      candidates.push(m);
-    } else skipped.push({ id: m.id, received_at: m.receivedAt, from: emailAddress(m.from), subject: m.subject.slice(0, 80), kind: 'skipped', outcome: 'prefilter', processed_at: stamp() });
+    if (looksFinancial(m)) candidates.push(m);
+    else skipped.push({ id: m.id, received_at: m.receivedAt, from: emailAddress(m.from), subject: m.subject.slice(0, 80), kind: 'skipped', outcome: 'prefilter', processed_at: stamp() });
   }
+  const base = { listed: ids.length, alreadyDone: ids.length - fresh.length, read: metas.length, total: fresh.length, ...(interrupted ? { interrupted } : {}) };
+
   if (opts.metaOnly) {
-    if (!opts.reprocess) await db.append(db.emails, skipped);
-    return { listed: ids.length, candidates: candidates.length, alreadyDone: ids.length - fresh.length, emails: candidates.map((m) => ({ ...m, bodyText: m.snippet, attachments: [] })) };
+    if (!interrupted) clearScanCheckpoint();
+    return { ...base, candidates: candidates.length, emails: candidates.map((m) => ({ ...m, bodyText: m.snippet, attachments: [] })) };
   }
-  p({ phase: 'Downloading candidates', done: 0, total: candidateIds.length });
-  const emails = await fetchFull(candidateIds, (n) => p({ phase: 'Downloading candidates', done: n, total: candidateIds.length }), opts.signal);
-  await db.append(db.emails, skipped);
-  return { listed: ids.length, candidates: emails.length, alreadyDone: ids.length - fresh.length, emails };
+
+  // Full bodies for candidates. On a rate limit, keep what landed: the caller
+  // processes it and the email log makes the next run skip it.
+  const wanted = candidates.filter((m) => opts.reprocess || !db.emails.has(m.id)).map((m) => m.id);
+  p({ phase: 'Downloading candidates', done: 0, total: wanted.length });
+  const emails: FetchedEmail[] = [];
+  try {
+    await fetchFull(wanted, {
+      signal: opts.signal,
+      onBatch: (es) => emails.push(...es),
+      onProgress: (n) => p({ phase: 'Downloading candidates', done: n, total: wanted.length }),
+    });
+  } catch (err) {
+    if (isAbort(err)) throw err;
+    interrupted = interrupted ?? String((err as Error).message ?? err);
+  }
+  if (!opts.reprocess) await db.append(db.emails, skipped);
+  if (!interrupted) clearScanCheckpoint();
+  return { ...base, ...(interrupted ? { interrupted } : {}), candidates: emails.length, emails };
 }
 
 export interface ProcessSummary {

@@ -74,23 +74,64 @@ const BATCH_SIZE = 20;
 const BATCH_CONCURRENCY = 2;
 
 /**
- * Gmail allows 15,000 quota units per minute per user; messages.get costs 5.
- * A token bucket keeps us near 150 units/s (30 reads/s) so a big inbox is
- * read steadily instead of hitting 429s and stalling for a minute.
+ * Gmail's per-user quota differs between projects (documented 15,000
+ * units/min, observed lower). messages.get costs 5 units. A token bucket
+ * paces reads; the pace halves on every 429 and creeps back up after a quiet
+ * spell, and the value that works is remembered on the device.
  */
-const UNITS_PER_SEC = 100;
-let bucket = UNITS_PER_SEC * 2;
+const PACE_KEY = 'paisabook.gmailPace.v1';
+const PACE_MAX = 200;
+const PACE_MIN = 10;
+let unitsPerSec = readPace();
+let bucket = unitsPerSec;
 let lastRefill = Date.now();
+let lastLimitAt = 0;
+
+function readPace(): number {
+  try {
+    const v = Number(globalThis.localStorage?.getItem(PACE_KEY));
+    return v >= PACE_MIN && v <= PACE_MAX ? v : 60;
+  } catch {
+    return 60;
+  }
+}
+function savePace(): void {
+  try {
+    globalThis.localStorage?.setItem(PACE_KEY, String(unitsPerSec));
+  } catch {
+    /* ignore */
+  }
+}
+/** Current pace in message reads per second. */
+export function gmailPace(): number {
+  return Math.round(unitsPerSec / 5);
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('paisabook:ratelimit', (e) => {
+    const d = (e as CustomEvent<{ status: number; url?: string }>).detail;
+    if (d.status !== 429 || !/gmail/.test(d.url ?? '')) return;
+    if (Date.now() - lastLimitAt < 5000) return; // one halving per burst
+    lastLimitAt = Date.now();
+    unitsPerSec = Math.max(PACE_MIN, Math.floor(unitsPerSec / 2));
+    bucket = 0;
+    savePace();
+  });
+}
 async function throttle(units: number): Promise<void> {
   for (;;) {
     const now = Date.now();
-    bucket = Math.min(UNITS_PER_SEC * 2, bucket + ((now - lastRefill) / 1000) * UNITS_PER_SEC);
+    if (lastLimitAt && now - lastLimitAt > 90_000 && unitsPerSec < PACE_MAX) {
+      unitsPerSec = Math.min(PACE_MAX, Math.floor(unitsPerSec * 1.25));
+      lastLimitAt = now;
+      savePace();
+    }
+    bucket = Math.min(unitsPerSec, bucket + ((now - lastRefill) / 1000) * unitsPerSec);
     lastRefill = now;
     if (bucket >= units) {
       bucket -= units;
       return;
     }
-    await new Promise((r) => setTimeout(r, Math.ceil(((units - bucket) / UNITS_PER_SEC) * 1000)));
+    await new Promise((r) => setTimeout(r, Math.ceil(((units - bucket) / unitsPerSec) * 1000)));
   }
 }
 
@@ -155,7 +196,14 @@ async function batchGet(ids: string[], query: string, signal?: AbortSignal): Pro
   return out;
 }
 
-async function fetchMany(ids: string[], query: string, onProgress?: (n: number) => void, signal?: AbortSignal): Promise<Message[]> {
+export interface FetchOpts<T> {
+  onProgress?: (n: number) => void;
+  /** called as each batch lands — lets callers checkpoint partial progress */
+  onBatch?: (items: T[]) => void;
+  signal?: AbortSignal;
+}
+
+async function fetchMany(ids: string[], query: string, opts: FetchOpts<Message>): Promise<Message[]> {
   let done = 0;
   const batches = await mapPool(
     chunk(ids, BATCH_SIZE),
@@ -163,17 +211,22 @@ async function fetchMany(ids: string[], query: string, onProgress?: (n: number) 
     async (batch, _i, poolSignal) => {
       const msgs = await batchGet(batch, query, poolSignal);
       done += batch.length;
-      onProgress?.(done);
+      opts.onBatch?.(msgs);
+      opts.onProgress?.(done);
       return msgs;
     },
-    signal,
+    opts.signal,
   );
   return batches.flat();
 }
 
 /** Cheap pass: headers + snippet only (no bodies). */
-export async function fetchMetas(ids: string[], onProgress?: (n: number) => void, signal?: AbortSignal): Promise<EmailMeta[]> {
-  const msgs = await fetchMany(ids, 'format=metadata&metadataHeaders=From&metadataHeaders=Subject', onProgress, signal);
+export async function fetchMetas(ids: string[], opts: FetchOpts<EmailMeta> = {}): Promise<EmailMeta[]> {
+  const msgs = await fetchMany(ids, 'format=metadata&metadataHeaders=From&metadataHeaders=Subject', {
+    onProgress: opts.onProgress,
+    signal: opts.signal,
+    onBatch: opts.onBatch ? (ms) => opts.onBatch!(ms.map((m) => metaOf(m, false))) : undefined,
+  });
   return msgs.map((m) => metaOf(m, false));
 }
 
@@ -189,18 +242,24 @@ function metaOf(msg: Message, hasPdf: boolean): EmailMeta {
   };
 }
 
-export async function fetchFull(ids: string[], onProgress?: (n: number) => void, signal?: AbortSignal): Promise<FetchedEmail[]> {
-  const msgs = await fetchMany(ids, 'format=full', onProgress, signal);
-  return msgs.map((msg) => {
-    const attachments: FetchedEmail['attachments'] = [];
-    walk(msg.payload, (p) => {
-      if (p.filename && p.body?.attachmentId) {
-        attachments.push({ attachmentId: p.body.attachmentId, filename: p.filename, mimeType: p.mimeType ?? 'application/octet-stream' });
-      }
-    });
-    const hasPdf = attachments.some((a) => /pdf/i.test(a.mimeType) || /\.pdf$/i.test(a.filename));
-    return { ...metaOf(msg, hasPdf), bodyText: extractBody(msg.payload).slice(0, 8000), attachments };
+function fullOf(msg: Message): FetchedEmail {
+  const attachments: FetchedEmail['attachments'] = [];
+  walk(msg.payload, (p) => {
+    if (p.filename && p.body?.attachmentId) {
+      attachments.push({ attachmentId: p.body.attachmentId, filename: p.filename, mimeType: p.mimeType ?? 'application/octet-stream' });
+    }
   });
+  const hasPdf = attachments.some((a) => /pdf/i.test(a.mimeType) || /\.pdf$/i.test(a.filename));
+  return { ...metaOf(msg, hasPdf), bodyText: extractBody(msg.payload).slice(0, 8000), attachments };
+}
+
+export async function fetchFull(ids: string[], opts: FetchOpts<FetchedEmail> = {}): Promise<FetchedEmail[]> {
+  const msgs = await fetchMany(ids, 'format=full', {
+    onProgress: opts.onProgress,
+    signal: opts.signal,
+    onBatch: opts.onBatch ? (ms) => opts.onBatch!(ms.map(fullOf)) : undefined,
+  });
+  return msgs.map(fullOf);
 }
 
 export async function downloadAttachment(messageId: string, attachmentId: string): Promise<Uint8Array> {

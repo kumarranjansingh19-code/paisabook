@@ -11,7 +11,7 @@ import { importStatement, type ImportOutcome, type PendingPdf } from './statemen
 import { rehomeUnmatched } from './accounts';
 import { daysAgoIso, todayIso } from './dates';
 import { usage } from '../llm/gemini';
-import type { FetchedEmail } from '../google/gmail';
+import { gmailPace, type FetchedEmail } from '../google/gmail';
 
 export interface SyncOptions {
   from: string;
@@ -101,6 +101,11 @@ export async function runSync(opts: SyncOptions): Promise<void> {
     syncState.summary.emails_in_range = scan.listed;
     syncState.summary.candidates = scan.candidates;
     log(`${scan.listed} emails in range, ${scan.alreadyDone} already processed, ${scan.candidates} look financial`);
+    if (scan.interrupted) {
+      log(`⏸ Gmail stopped us after ${scan.read}/${scan.total} headers (${scan.interrupted.slice(0, 90)}). Processing what was read; run Sync again to continue from there.`);
+      syncState.summary.headers_read = scan.read;
+      syncState.summary.headers_total = scan.total;
+    }
 
     if (scan.emails.length) {
       const proc = await processEmails(scan.emails, { onProgress, signal });
@@ -124,8 +129,8 @@ export async function runSync(opts: SyncOptions): Promise<void> {
     }
     await db.setSetting('last_sync', new Date().toISOString());
     await db.setSetting('last_sync_to', opts.to);
-    syncState.phase = 'done';
-    log(`Done in ${Math.round((Date.now() - syncState.startedAt) / 1000)}s using ${usage.calls - syncState.llmCallsAtStart} AI calls`);
+    syncState.phase = scan.interrupted ? 'partial' : 'done';
+    log(`${scan.interrupted ? 'Partial run finished' : 'Done'} in ${Math.round((Date.now() - syncState.startedAt) / 1000)}s using ${usage.calls - syncState.llmCallsAtStart} AI calls · Gmail pace now ${gmailPace()} reads/s`);
   } catch (err) {
     if ((err as Error).name === 'AbortError') {
       syncState.phase = 'stopped';
