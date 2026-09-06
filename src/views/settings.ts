@@ -75,7 +75,7 @@ export const settingsView: View = {
           .join('\n');
         downloadText('paisabook-transactions.csv', csv, 'text/csv');
       },
-      signin: () => startSignIn('#/settings'),
+      signin: () => void startSignIn('#/settings'),
       signout: () => {
         signOut();
         draw();

@@ -53,7 +53,7 @@ export async function renderCurrent(): Promise<void> {
   if (view.requiresDb !== false && s.setupDone) {
     if (!hasValidToken()) {
       main.innerHTML = signInCard();
-      main.querySelector('[data-signin]')?.addEventListener('click', () => startSignIn(location.hash));
+      main.querySelector('[data-signin]')?.addEventListener('click', () => void startSignIn(location.hash));
       return;
     }
     if (!db.loaded) {

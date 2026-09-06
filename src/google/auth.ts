@@ -25,64 +25,154 @@ export function redirectUri(): string {
   return `${location.origin}${import.meta.env.BASE_URL}`;
 }
 
-/** Kick off sign-in. Remembers where to return (hash route) across the redirect. */
-export function startSignIn(returnTo = location.hash || '#/'): void {
-  const clientId = settings().googleClientId;
+const TOKEN_URL = 'https://oauth2.googleapis.com/token';
+
+/** Is this client a Google "Desktop app" client? Those only allow localhost redirects. */
+export function isLocalhost(): boolean {
+  return /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+}
+
+function b64url(bytes: ArrayBuffer): string {
+  return btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/**
+ * Kick off sign-in. With a client secret on the device we use the
+ * authorization-code flow with PKCE and get a refresh token, so sign-in
+ * survives the hourly access-token expiry (the old-app experience). Without
+ * one we fall back to the implicit flow (access token only).
+ */
+export async function startSignIn(returnTo = location.hash || '#/'): Promise<void> {
+  const { googleClientId: clientId, googleClientSecret: secret } = settings();
   if (!clientId) throw new Error('No OAuth client id configured');
   const state = Math.random().toString(36).slice(2);
   sessionStorage.setItem('paisabook.oauth.state', state);
   sessionStorage.setItem('paisabook.oauth.return', returnTo);
-  const params = new URLSearchParams({
-    client_id: clientId,
-    redirect_uri: redirectUri(),
-    response_type: 'token',
-    scope: SCOPES,
-    include_granted_scopes: 'true',
-    state,
-    prompt: getToken() ? '' : 'consent',
-  });
+  const common = { client_id: clientId, redirect_uri: redirectUri(), scope: SCOPES, include_granted_scopes: 'true', state };
+  let params: URLSearchParams;
+  if (secret) {
+    const verifier = b64url(crypto.getRandomValues(new Uint8Array(48)).buffer);
+    sessionStorage.setItem('paisabook.oauth.verifier', verifier);
+    const challenge = b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
+    params = new URLSearchParams({
+      ...common,
+      response_type: 'code',
+      access_type: 'offline',
+      prompt: getToken()?.refreshToken ? 'select_account' : 'consent', // consent is what makes Google issue a refresh token
+      code_challenge: challenge,
+      code_challenge_method: 'S256',
+    });
+  } else {
+    params = new URLSearchParams({ ...common, response_type: 'token', prompt: getToken() ? '' : 'consent' });
+  }
   location.assign(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
 }
 
-/** Call once on boot: if the URL carries an OAuth response, store it and clean the URL. */
-export function consumeRedirect(): string | null {
-  const hash = location.hash.startsWith('#') ? location.hash.slice(1) : location.hash;
-  if (!/(^|&)access_token=/.test(hash)) return null;
-  const p = new URLSearchParams(hash);
+interface TokenResponse {
+  access_token?: string;
+  refresh_token?: string;
+  expires_in?: number;
+  scope?: string;
+  error?: string;
+  error_description?: string;
+}
+
+async function tokenRequest(body: Record<string, string>): Promise<TokenResponse> {
+  const res = await fetch(TOKEN_URL, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(body) });
+  return (await res.json().catch(() => ({}))) as TokenResponse;
+}
+
+/**
+ * Call once on boot: if the URL carries an OAuth response (code in the query
+ * for the code flow, token in the hash for implicit), store it and clean the
+ * URL. Returns the route to go back to.
+ */
+export async function consumeRedirect(): Promise<string | null> {
+  const query = new URLSearchParams(location.search);
+  const hash = new URLSearchParams(location.hash.replace(/^#/, ''));
+  const isCode = query.has('code') || query.has('error');
+  const isImplicit = hash.has('access_token');
+  if (!isCode && !isImplicit) return null;
+  const p = isCode ? query : hash;
   const expected = sessionStorage.getItem('paisabook.oauth.state');
   const returnTo = sessionStorage.getItem('paisabook.oauth.return') ?? '#/';
-  sessionStorage.removeItem('paisabook.oauth.state');
-  sessionStorage.removeItem('paisabook.oauth.return');
+  const verifier = sessionStorage.getItem('paisabook.oauth.verifier') ?? '';
+  for (const k of ['state', 'return', 'verifier']) sessionStorage.removeItem(`paisabook.oauth.${k}`);
+  const clean = () => history.replaceState(null, '', location.pathname + returnTo);
+  if (p.get('error')) {
+    clean();
+    throw new Error(`Google sign-in failed: ${p.get('error')}`);
+  }
   if (expected && p.get('state') !== expected) {
-    history.replaceState(null, '', location.pathname);
+    clean();
     throw new Error('OAuth state mismatch — please sign in again');
+  }
+  if (isCode) {
+    const { googleClientId, googleClientSecret } = settings();
+    const t = await tokenRequest({
+      grant_type: 'authorization_code',
+      code: p.get('code')!,
+      client_id: googleClientId,
+      client_secret: googleClientSecret,
+      redirect_uri: redirectUri(),
+      code_verifier: verifier,
+    });
+    clean();
+    if (!t.access_token) throw new Error(`Token exchange failed: ${t.error_description ?? t.error ?? 'unknown error'}`);
+    setToken({
+      accessToken: t.access_token,
+      expiresAt: Date.now() + ((t.expires_in ?? 3600) - 60) * 1000,
+      scope: t.scope ?? '',
+      refreshToken: t.refresh_token ?? getToken()?.refreshToken,
+    });
+    return returnTo;
   }
   const token = p.get('access_token');
   const expiresIn = Number(p.get('expires_in') ?? 3600);
-  if (token) {
-    setToken({ accessToken: token, expiresAt: Date.now() + (expiresIn - 60) * 1000, scope: p.get('scope') ?? '' });
-  }
-  history.replaceState(null, '', location.pathname + returnTo);
+  if (token) setToken({ accessToken: token, expiresAt: Date.now() + (expiresIn - 60) * 1000, scope: p.get('scope') ?? '' });
+  clean();
   return returnTo;
 }
 
+/** True when we can make requests now or can silently get a fresh access token. */
 export function hasValidToken(): boolean {
   const t = getToken();
-  return !!t && t.expiresAt > Date.now();
+  return !!t && (t.expiresAt > Date.now() || !!t.refreshToken);
 }
 
-export function accessToken(): string {
+let refreshing: Promise<string> | null = null;
+
+/** Current access token, silently refreshed when expired and a refresh token exists. */
+export async function accessToken(): Promise<string> {
   const t = getToken();
-  if (!t || t.expiresAt <= Date.now()) throw new AuthRequiredError();
-  return t.accessToken;
+  if (!t) throw new AuthRequiredError();
+  if (t.expiresAt > Date.now()) return t.accessToken;
+  if (!t.refreshToken) throw new AuthRequiredError();
+  if (!refreshing) {
+    refreshing = (async () => {
+      const { googleClientId, googleClientSecret } = settings();
+      const r = await tokenRequest({ grant_type: 'refresh_token', refresh_token: t.refreshToken!, client_id: googleClientId, client_secret: googleClientSecret });
+      if (!r.access_token) {
+        // invalid_grant = refresh token expired/revoked (testing-mode apps: 7 days) → sign in again
+        setToken(null);
+        throw new AuthRequiredError(`Google session expired (${r.error ?? 'refresh failed'}) — sign in again`);
+      }
+      setToken({ ...t, accessToken: r.access_token, expiresAt: Date.now() + ((r.expires_in ?? 3600) - 60) * 1000, scope: r.scope ?? t.scope });
+      return r.access_token;
+    })().finally(() => {
+      refreshing = null;
+    });
+  }
+  return refreshing;
 }
 
 export function signOut(): void {
   const t = getToken();
   setToken(null);
   if (t) {
-    // best-effort revoke; no-cors so we don't care about the response
-    fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(t.accessToken)}`, { method: 'POST', mode: 'no-cors' }).catch(() => {});
+    // best-effort revoke (the refresh token if we have one revokes everything); no-cors — we don't need the response
+    const tok = t.refreshToken ?? t.accessToken;
+    fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(tok)}`, { method: 'POST', mode: 'no-cors' }).catch(() => {});
   }
 }
 
@@ -118,9 +208,15 @@ export async function gfetchRaw(url: string, init: RequestInit = {}, retries = 8
     const res = await fetch(url, {
       ...init,
       signal: withTimeout(init.signal),
-      headers: { Authorization: `Bearer ${accessToken()}`, ...(init.body && !givenHeaders['Content-Type'] ? { 'Content-Type': 'application/json' } : {}), ...givenHeaders },
+      headers: { Authorization: `Bearer ${await accessToken()}`, ...(init.body && !givenHeaders['Content-Type'] ? { 'Content-Type': 'application/json' } : {}), ...givenHeaders },
     });
     if (res.status === 401) {
+      const t = getToken();
+      if (t?.refreshToken && attempt === 0) {
+        // access token revoked/expired early: force a refresh and retry once
+        setToken({ ...t, expiresAt: 0 });
+        continue;
+      }
       setToken(null);
       throw new AuthRequiredError();
     }

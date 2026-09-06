@@ -48,7 +48,7 @@ route('/settings', settingsView);
 route('/more', moreView);
 
 try {
-  const back = consumeRedirect();
+  const back = await consumeRedirect();
   if (back) {
     toast('Signed in to Google', 'ok');
     navigate(back.replace(/^#/, ''));

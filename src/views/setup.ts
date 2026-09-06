@@ -2,7 +2,7 @@ import type { View } from '../app/router';
 import { navigate } from '../app/router';
 import { html, raw, onAction, toast, spinner, modal } from '../app/ui';
 import { settings, saveSettings } from '../store/local';
-import { hasValidToken, redirectUri, startSignIn, whoAmI } from '../google/auth';
+import { hasValidToken, isLocalhost, redirectUri, startSignIn } from '../google/auth';
 import { testGemini } from '../llm/gemini';
 import { db } from '../store/db';
 import { parseSpreadsheetId } from '../google/sheets';
@@ -48,18 +48,20 @@ const STEP_HTML: Record<Step, () => string> = {
     const s = settings();
     return html`<div class="card">
       <h2>1. Connect Google</h2>
-      <p class="muted">PaisaBook reads Gmail and writes to a Google Sheet <em>from your browser</em>. You need your own free OAuth client so no one else ever holds your tokens.</p>
+      <p class="muted">PaisaBook reads Gmail and writes to a Google Sheet <em>from your browser</em>. You need your own free OAuth client so no one else ever holds your tokens. Paste the downloaded client JSON and you sign in once; the app renews its own access after that.</p>
+      ${isLocalhost() ? raw('<p class="small"><span class="pill ok">localhost</span> A <strong>Desktop app</strong> client JSON works here as-is (the same file the old finance app used). No URLs to register.</p>') : ''}
       <details ${s.googleClientId ? '' : 'open'}>
         <summary>How to create the OAuth client (one time, ~5 minutes)</summary>
         <ol class="help">
           <li>Open <a href="https://console.cloud.google.com/apis/library" target="_blank" rel="noopener">Google Cloud Console → APIs & Services</a>. Create a project (any name).</li>
           <li>Enable the <strong>Gmail API</strong> and the <strong>Google Sheets API</strong>.</li>
           <li><strong>OAuth consent screen</strong> → External → fill the app name and your email → add yourself under <em>Test users</em>. Leave it in Testing mode (no verification needed for yourself).</li>
-          <li><strong>Credentials → Create credentials → OAuth client ID → Web application</strong>. Add this exact URL to BOTH <em>Authorized JavaScript origins</em> (without the trailing slash) and <em>Authorized redirect URIs</em> (with it):
+          <li><strong>Credentials → Create credentials → OAuth client ID</strong>. For a phone or hosted URL choose <strong>Web application</strong> and add this exact URL to BOTH <em>Authorized JavaScript origins</em> (without the trailing slash) and <em>Authorized redirect URIs</em> (with it):
             <div class="copy" data-copy="${redirectUri()}">${redirectUri()} <button type="button" class="btn small" data-action="copy">copy</button></div>
             <div class="copy" data-copy="${location.origin}">${location.origin} <button type="button" class="btn small" data-action="copy">copy</button></div>
+            For localhost only, a <strong>Desktop app</strong> client needs no URLs.
           </li>
-          <li>Download the client JSON (or copy the Client ID) and paste it below.</li>
+          <li>Download the client JSON and paste it below (a bare Client ID also works, but then you'll be asked to sign in again every hour).</li>
         </ol>
       </details>
       <label class="field">Client JSON or Client ID
@@ -135,15 +137,19 @@ function wire(root: HTMLElement, step: Step): void {
       const text = el.closest<HTMLElement>('[data-copy]')?.dataset.copy ?? '';
       navigator.clipboard?.writeText(text).then(() => toast('Copied'));
     },
-    google: () => {
+    google: async () => {
       const rawText = root.querySelector<HTMLTextAreaElement>('textarea[name=clientJson]')!.value.trim();
-      const id = extractClientId(rawText);
-      if (!id) {
+      const c = parseClientJson(rawText);
+      if (!c.clientId) {
         toast('Could not find a client_id in that text', 'error');
         return;
       }
-      saveSettings({ googleClientId: id });
-      startSignIn('#/setup?step=gemini');
+      if (c.kind === 'installed' && !isLocalhost()) {
+        toast('That is a Desktop-app client: it only works at http://localhost. On a phone or a hosted URL you need a Web application client.', 'error');
+        return;
+      }
+      saveSettings({ googleClientId: c.clientId, googleClientSecret: c.clientSecret });
+      await startSignIn('#/setup?step=gemini');
     },
     gemini: async () => {
       const key = root.querySelector<HTMLInputElement>('input[name=geminiKey]')!.value.trim();
@@ -279,7 +285,16 @@ function renderProposals(box: HTMLElement, proposals: AccountProposal[], partial
     <div class="row"><button class="btn primary" data-action="add-selected">Add selected</button><button class="btn" data-action="add-manual">Add another manually</button></div></div>`;
 }
 
-export function extractClientId(text: string): string {
+/** Accepts the downloaded client JSON (web or installed) or a bare client id. */
+export function parseClientJson(text: string): { clientId: string; clientSecret: string; kind: 'web' | 'installed' | 'id' } {
+  try {
+    const j = JSON.parse(text) as { web?: { client_id?: string; client_secret?: string }; installed?: { client_id?: string; client_secret?: string } };
+    const kind = j.web ? 'web' : j.installed ? 'installed' : null;
+    const c = j.web ?? j.installed;
+    if (kind && c?.client_id) return { clientId: c.client_id, clientSecret: c.client_secret ?? '', kind };
+  } catch {
+    /* not JSON */
+  }
   const m = /[\w-]+\.apps\.googleusercontent\.com/.exec(text);
-  return m ? m[0] : '';
+  return { clientId: m ? m[0] : '', clientSecret: '', kind: 'id' };
 }

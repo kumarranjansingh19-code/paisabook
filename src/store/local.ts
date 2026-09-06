@@ -4,6 +4,8 @@
  */
 export interface DeviceSettings {
   googleClientId: string;
+  /** From the downloaded client JSON. Enables the code flow + refresh token (sign in once). Device-only. */
+  googleClientSecret: string;
   geminiApiKey: string;
   modelBulk: string;
   modelReasoning: string;
@@ -19,6 +21,7 @@ const TOKEN_KEY = 'paisabook.token.v1';
 
 export const DEFAULTS: DeviceSettings = {
   googleClientId: '',
+  googleClientSecret: '',
   geminiApiKey: '',
   modelBulk: 'gemini-3.5-flash-lite',
   modelReasoning: 'gemini-3.7-flash',
@@ -58,6 +61,8 @@ export interface StoredToken {
   accessToken: string;
   expiresAt: number; // epoch ms
   scope: string;
+  /** present with the code flow; lets the app renew access without a new sign-in */
+  refreshToken?: string;
 }
 
 export function getToken(): StoredToken | null {
