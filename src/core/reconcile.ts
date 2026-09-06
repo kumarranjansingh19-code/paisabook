@@ -77,6 +77,25 @@ export async function reconcile(
       continue;
     }
 
+    // 2a. Near-amount: the alert said ₹1,15,000, the statement posts ₹1,16,357 (surcharge). Same merchant, same day.
+    const near = live.find(
+      (row) =>
+        !matchedIds.has(row.id) &&
+        (row.status === 'provisional' || row.status === 'needs_review') &&
+        row.direction === t.direction &&
+        row.amount_paise !== t.amountPaise &&
+        nearAmount(row.amount_paise, t.amountPaise) &&
+        similarNarration(row.narration, t.narration) &&
+        Math.abs(daysBetween(row.posted_at, t.postedAt)) <= FUZZY_WINDOW_DAYS,
+    );
+    if (near) {
+      matchedIds.add(near.id);
+      // the statement's amount is the one that was charged
+      db.update(db.transactions, near.id, { status: 'confirmed', statement_id: sourceId, posted_at: t.postedAt, amount_paise: t.amountPaise, ref_no: near.ref_no || (t.refNo ?? '') });
+      result.matchedFuzzy++;
+      continue;
+    }
+
     // 2b. Cross-source dedup: overlapping statement periods present the same
     // confirmed txn again — same amount/direction/day from a different import.
     const cross = live.find(
@@ -141,17 +160,50 @@ export async function reconcile(
  * statement row absorbs at most one alert. The alert row is hidden and the
  * statement row keeps the alert's reference/narration if it had none.
  */
+/**
+ * Card statements sometimes post a slightly different amount from the alert:
+ * a surcharge on education/fuel/rent payments, a forex markup, a rounding.
+ * Same merchant, same day, within 3% (or ₹50) is the same transaction.
+ */
+export function nearAmount(a: number, b: number): boolean {
+  const diff = Math.abs(a - b);
+  return diff <= Math.max(5000, Math.round(Math.max(a, b) * 0.03));
+}
+
 export async function matchAlertsToStatements(): Promise<number> {
   const live = db.liveTransactions();
   const stmtRows = live.filter((t) => t.source === 'statement' && t.status === 'confirmed');
   const used = new Set<string>();
   let n = 0;
-  for (const a of live) {
-    if (a.source !== 'email_alert' || (a.status !== 'provisional' && a.status !== 'needs_review') || !a.account_id) continue;
-    const s = stmtRows.find(
-      (r) => !used.has(r.id) && r.account_id === a.account_id && r.amount_paise === a.amount_paise && r.direction === a.direction && Math.abs(daysBetween(r.posted_at, a.posted_at)) <= FUZZY_WINDOW_DAYS,
+  const alerts = live.filter((a) => a.source === 'email_alert' && (a.status === 'provisional' || a.status === 'needs_review') && !!a.account_id);
+  const find = (a: Transaction, tolerant: boolean) =>
+    stmtRows.find(
+      (r) =>
+        !used.has(r.id) &&
+        r.account_id === a.account_id &&
+        r.direction === a.direction &&
+        Math.abs(daysBetween(r.posted_at, a.posted_at)) <= FUZZY_WINDOW_DAYS &&
+        (tolerant ? r.amount_paise !== a.amount_paise && nearAmount(r.amount_paise, a.amount_paise) && similarNarration(r.narration, a.narration) : r.amount_paise === a.amount_paise),
     );
-    if (!s) continue;
+  // exact amounts first (so a tolerant match never steals a row that has an exact twin), then near-amount + same merchant
+  const pairs: Array<[Transaction, Transaction]> = [];
+  for (const a of alerts) {
+    const s = find(a, false);
+    if (s) {
+      used.add(s.id);
+      pairs.push([a, s]);
+    }
+  }
+  const matchedAlerts = new Set(pairs.map(([a]) => a.id));
+  for (const a of alerts) {
+    if (matchedAlerts.has(a.id)) continue;
+    const s = find(a, true);
+    if (s) {
+      used.add(s.id);
+      pairs.push([a, s]);
+    }
+  }
+  for (const [a, s] of pairs) {
     used.add(s.id);
     const patch: Partial<Transaction> = {};
     if (!s.ref_no && a.ref_no) patch.ref_no = a.ref_no;
