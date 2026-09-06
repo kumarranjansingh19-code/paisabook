@@ -2,6 +2,7 @@ import type { View } from '../app/router';
 import { html, raw, onAction, toast, modal, confirmDialog, downloadText, spinner } from '../app/ui';
 import { db, newId, stamp, type Category } from '../store/db';
 import { addCategory, categories } from '../core/categories';
+import { cacheStats, clearMailCache } from '../store/mailcache';
 import { settings, saveSettings, resetDevice } from '../store/local';
 import { signOut, redirectUri, hasValidToken, startSignIn } from '../google/auth';
 import { escapeHtml } from '../core/text';
@@ -113,6 +114,12 @@ export const settingsView: View = {
         location.reload();
       },
       'change-sheet': () => navigate('/setup?step=sheet'),
+      'clear-mail-cache': async () => {
+        const stats = await cacheStats();
+        if (!(await confirmDialog(`Clear ${stats.emails} cached emails and their AI readings from this device? The sheet is untouched; the next sync re-downloads and re-reads them (costs Gmail quota and AI calls).`, 'Clear'))) return;
+        await clearMailCache();
+        toast('Cache cleared', 'ok');
+      },
       'add-category': async () => {
         const r = await modal(
           `<label class="field">Name <input name="label" placeholder="Pet care" required /></label>
@@ -173,6 +180,7 @@ function page(): string {
     <div class="card">
       <h3>Data</h3>
       <p class="small muted">Statement passwords stay on this device (set them from the key button on each account). Everything else lives in your Google Sheet.</p>
-      <div class="row"><button class="btn" data-action="export">Export CSV</button><button class="btn danger" data-action="reset">Forget this device</button></div>
+      <div class="row"><button class="btn" data-action="export">Export CSV</button><button class="btn" data-action="clear-mail-cache">Clear mail & AI cache</button><button class="btn danger" data-action="reset">Forget this device</button></div>
+      <p class="small muted">The mail & AI cache holds downloaded emails and model results on this device so re-runs are free. Clear it to measure a true first-time run, or to free space.</p>
     </div>`;
 }
