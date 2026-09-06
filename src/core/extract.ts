@@ -37,8 +37,9 @@ export function looksFinancial(m: EmailMeta): boolean {
   if (NOISE_SENDER.test(from) && !/statement|debited|credited/i.test(text)) return false;
   if (FIN_SENDER.test(from)) {
     if (m.hasPdf) return true;
-    if (FIN_WORDS.test(text) || AMOUNT.test(text)) return true;
-    return !MARKETING_SUBJECT.test(m.subject);
+    if (MARKETING_SUBJECT.test(m.subject)) return false;
+    // alerts carry money words or an amount; if neither, at least a number in the snippet (masked a/c, ref no)
+    return FIN_WORDS.test(text) || AMOUNT.test(text) || /\d{3,}/.test(m.snippet);
   }
   return FIN_WORDS.test(text) && AMOUNT.test(text);
 }
@@ -55,9 +56,13 @@ export function deservesSecondLook(e: FetchedEmail): boolean {
 const FOCUSED_TERMS =
   '(debited OR credited OR spent OR statement OR "e-statement" OR transaction OR txn OR "credit card" OR "debit card" OR UPI OR IMPS OR NEFT OR "amount due" OR "total due" OR "minimum due" OR "payment received" OR withdrawn OR deposited OR "Rs." OR INR OR "a/c" OR from:(bank OR card OR alerts OR alert OR statement OR statements OR jupiter OR onecard OR slice))';
 
-export function buildQuery(from: string, to: string, broad = false): string {
+/** Senders only — enough for account discovery, a fraction of the mail. */
+const SENDER_TERMS = 'from:(bank OR card OR alerts OR alert OR statement OR statements OR jupiter OR onecard OR slice OR sbicard OR hdfcbank OR icicibank OR axisbank OR kotak OR federalbank OR yesbank OR idfcfirst OR indusind)';
+
+export function buildQuery(from: string, to: string, broad = false, sendersOnly = false): string {
   const extra = settings().gmailExtraQuery.trim();
-  return `after:${gmailDate(from)} before:${gmailDate(to, 1)} -in:spam -in:trash -category:social -category:forums${broad ? '' : ` ${FOCUSED_TERMS}`}${extra ? ` ${extra}` : ''}`;
+  const terms = sendersOnly ? ` ${SENDER_TERMS}` : broad ? '' : ` ${FOCUSED_TERMS}`;
+  return `after:${gmailDate(from)} before:${gmailDate(to, 1)} -in:spam -in:trash -category:social -category:forums${terms}${extra ? ` ${extra}` : ''}`;
 }
 
 export interface ScanProgress {
@@ -137,12 +142,14 @@ export async function scanMailbox(
     metaOnly?: boolean;
     /** newest-first cap on how many emails to read (discovery doesn't need the whole period) */
     maxEmails?: number;
+    /** only mail from bank-ish senders (discovery) */
+    sendersOnly?: boolean;
     onProgress?: (p: ScanProgress) => void;
     signal?: AbortSignal;
   } = {},
 ): Promise<ScanResult> {
   const p = opts.onProgress ?? (() => {});
-  const key = scanKey(from, to, opts.broad, opts.reprocess);
+  const key = `${scanKey(from, to, opts.broad, opts.reprocess)}|${opts.sendersOnly ? 's' : ''}${opts.maxEmails ?? ''}`;
   let ck = scanCheckpoint();
   if (ck && ck.key !== key) ck = null;
 
@@ -151,7 +158,7 @@ export async function scanMailbox(
     ids = ck.ids;
   } else {
     p({ phase: 'Listing mail', done: 0, total: 0 });
-    ids = await listMessageIds(buildQuery(from, to, opts.broad), opts.maxEmails ?? 8000, opts.signal);
+    ids = await listMessageIds(buildQuery(from, to, opts.broad, opts.sendersOnly), opts.maxEmails ?? 8000, opts.signal);
     ck = { key, from, to, ids, metas: [], savedAt: '' };
     saveCheckpoint(ck);
   }

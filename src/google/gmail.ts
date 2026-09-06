@@ -80,8 +80,10 @@ const BATCH_CONCURRENCY = 2;
  * spell, and the value that works is remembered on the device.
  */
 const PACE_KEY = 'paisabook.gmailPace.v1';
-const PACE_MAX = 200;
-const PACE_MIN = 25; // 5 reads/s — slow but never glacial
+// Measured on a real account: ~2,400 units/min before 403s, i.e. ~8 reads/s. Start just under that.
+const PACE_MAX = 100;
+const PACE_MIN = 20; // 4 reads/s — slow but never glacial
+const PACE_DEFAULT = 35;
 const UNITS_PER_READ = 5;
 let unitsPerSec = readPace();
 let bucket = unitsPerSec;
@@ -91,9 +93,9 @@ let lastLimitAt = 0;
 function readPace(): number {
   try {
     const v = Number(globalThis.localStorage?.getItem(PACE_KEY));
-    return v >= PACE_MIN && v <= PACE_MAX ? v : 60;
+    return v >= PACE_MIN && v <= PACE_MAX ? v : PACE_DEFAULT;
   } catch {
-    return 60;
+    return PACE_DEFAULT;
   }
 }
 function savePace(): void {

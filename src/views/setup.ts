@@ -208,11 +208,13 @@ function wire(root: HTMLElement, step: Step): void {
       window.addEventListener('paisabook:ratelimit', onLimit);
       try {
         if (!db.loaded) await db.load();
-        // Bodies cost the same quota as headers and are cached on the device, so the
-        // first sync reuses everything this scan downloads.
+        // Headers + snippets from bank-ish senders only: enough for discovery at a
+        // fraction of the Gmail quota. Bodies are downloaded (and cached) by the sync.
         const scan = await scanMailbox(daysAgoIso(60), todayIso(), {
           reprocess: true,
-          maxEmails: 1500,
+          metaOnly: true,
+          sendersOnly: true,
+          maxEmails: 500,
           onProgress: (p) => {
             status.innerHTML = spinner(`${p.phase} ${p.total ? `${p.done}/${p.total}` : ''}${note}`);
             note = '';
