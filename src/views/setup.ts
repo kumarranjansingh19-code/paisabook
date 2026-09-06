@@ -13,6 +13,7 @@ import { daysAgoIso, todayIso } from '../core/dates';
 import { escapeHtml } from '../core/text';
 
 type Step = 'google' | 'gemini' | 'sheet' | 'accounts' | 'done';
+let discovering = false;
 const ORDER: Step[] = ['google', 'gemini', 'sheet', 'accounts', 'done'];
 
 function currentStep(): Step {
@@ -186,21 +187,36 @@ function wire(root: HTMLElement, step: Step): void {
         status.innerHTML = `<p class="pill bad">${escapeHtml(String((err as Error).message))}</p>`;
       }
     },
-    discover: async () => {
+    discover: async (btn) => {
+      if (discovering) return toast('A scan is already running');
+      discovering = true;
+      btn.setAttribute('disabled', '');
       const status = root.querySelector<HTMLElement>('#discover-status')!;
+      let note = '';
+      const onLimit = (e: Event) => {
+        const d = (e as CustomEvent<{ waitMs: number }>).detail;
+        note = ` · Gmail rate limit, pausing ${Math.round(d.waitMs / 1000)}s`;
+      };
+      window.addEventListener('paisabook:ratelimit', onLimit);
       try {
         if (!db.loaded) await db.load();
         const scan = await scanMailbox(daysAgoIso(60), todayIso(), {
           reprocess: true,
           metaOnly: true,
-          onProgress: (p) => (status.innerHTML = spinner(`${p.phase} ${p.total ? `${p.done}/${p.total}` : ''}`)),
+          onProgress: (p) => {
+            status.innerHTML = spinner(`${p.phase} ${p.total ? `${p.done}/${p.total}` : ''}${note}`);
+            note = '';
+          },
         });
         status.innerHTML = spinner(`AI is reading ${scan.emails.length} emails for account names…`);
         const proposals = await discoverAccounts(scan.emails);
-        // discovery marked these emails as processed for the prefilter only; let the real sync re-read them
         renderProposals(status, proposals);
       } catch (err) {
-        status.innerHTML = `<p class="pill bad">${escapeHtml(String((err as Error).message))}</p>`;
+        status.innerHTML = `<p class="pill bad">${escapeHtml(String((err as Error).message))}</p><p class="small muted">Wait a minute and try again — Gmail limits reads per minute.</p>`;
+      } finally {
+        discovering = false;
+        btn.removeAttribute('disabled');
+        window.removeEventListener('paisabook:ratelimit', onLimit);
       }
     },
     'skip-accounts': () => {

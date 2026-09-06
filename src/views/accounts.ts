@@ -21,11 +21,21 @@ export const accountsView: View = {
       edit: (el) => editDialog(el.dataset.id!),
       password: (el) => passwordDialog(el.dataset.id!),
       discover: async (el) => {
+        if (el.hasAttribute('disabled')) return;
+        el.setAttribute('disabled', '');
         const box = el.closest('.card')!.querySelector<HTMLElement>('#disc')!;
         box.innerHTML = spinner('Scanning 60 days of mail…');
-        const scan = await scanMailbox(daysAgoIso(60), todayIso(), { reprocess: true, metaOnly: true, onProgress: (p) => (box.innerHTML = spinner(`${p.phase} ${p.total ? `${p.done}/${p.total}` : ''}`)) });
-        box.innerHTML = spinner('AI is looking for account names…');
-        const props = await discoverAccounts(scan.emails);
+        let props: Awaited<ReturnType<typeof discoverAccounts>>;
+        try {
+          const scan = await scanMailbox(daysAgoIso(60), todayIso(), { reprocess: true, metaOnly: true, onProgress: (p) => (box.innerHTML = spinner(`${p.phase} ${p.total ? `${p.done}/${p.total}` : ''}`)) });
+          box.innerHTML = spinner('AI is looking for account names…');
+          props = await discoverAccounts(scan.emails);
+        } catch (err) {
+          box.innerHTML = `<p class="pill bad">${escapeHtml(String((err as Error).message))}</p>`;
+          el.removeAttribute('disabled');
+          return;
+        }
+        el.removeAttribute('disabled');
         box.innerHTML = props.length
           ? props
               .map(

@@ -84,6 +84,16 @@ export async function runSync(opts: SyncOptions): Promise<void> {
     syncState.phase = p.phase;
     emit();
   };
+  let lastLimitLog = 0;
+  const onLimit = (e: Event) => {
+    const d = (e as CustomEvent<{ waitMs: number; status: number }>).detail;
+    if (syncState.progress) syncState.progress = { ...syncState.progress, note: `Google rate limit (${d.status}), pausing ${Math.round(d.waitMs / 1000)}s` };
+    if (Date.now() - lastLimitLog > 15_000) {
+      lastLimitLog = Date.now();
+      log(`⏸ Google rate limit hit — pausing ${Math.round(d.waitMs / 1000)}s before retrying`);
+    } else emit();
+  };
+  window.addEventListener('paisabook:ratelimit', onLimit);
   try {
     log(`Scanning ${opts.from} → ${opts.to}${opts.reprocess ? ' (re-reading processed mail)' : ''}`);
     const scan = await scanMailbox(opts.from, opts.to, { reprocess: opts.reprocess, broad: opts.broad, onProgress, signal });
@@ -126,6 +136,7 @@ export async function runSync(opts: SyncOptions): Promise<void> {
       log(`✖ ${syncState.error}`);
     }
   } finally {
+    window.removeEventListener('paisabook:ratelimit', onLimit);
     syncState.running = false;
     syncState.progress = null;
     controller = null;

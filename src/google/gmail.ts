@@ -78,7 +78,7 @@ const BATCH_CONCURRENCY = 2;
  * A token bucket keeps us near 150 units/s (30 reads/s) so a big inbox is
  * read steadily instead of hitting 429s and stalling for a minute.
  */
-const UNITS_PER_SEC = 150;
+const UNITS_PER_SEC = 100;
 let bucket = UNITS_PER_SEC * 2;
 let lastRefill = Date.now();
 async function throttle(units: number): Promise<void> {
@@ -160,8 +160,8 @@ async function fetchMany(ids: string[], query: string, onProgress?: (n: number) 
   const batches = await mapPool(
     chunk(ids, BATCH_SIZE),
     BATCH_CONCURRENCY,
-    async (batch) => {
-      const msgs = await batchGet(batch, query, signal);
+    async (batch, _i, poolSignal) => {
+      const msgs = await batchGet(batch, query, poolSignal);
       done += batch.length;
       onProgress?.(done);
       return msgs;

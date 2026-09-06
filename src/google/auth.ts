@@ -130,8 +130,15 @@ export async function gfetchRaw(url: string, init: RequestInit = {}, retries = 8
       if (res.status === 403 && !/rate ?limit|quota|usageLimits/i.test(body)) throw new ApiError(403, extractMessage(body) ?? '403 Forbidden', body);
       const retryAfter = Number(res.headers.get('Retry-After')) || 0;
       // Per-minute quotas reset within 60s: back off up to 20s per attempt (≈2 min total over 8 retries).
-      const wait = retryAfter ? retryAfter * 1000 : Math.min(1000 * 2 ** attempt, 20_000) + Math.random() * 1000;
-      await new Promise((r) => setTimeout(r, Math.min(wait, 30_000)));
+      const wait = Math.min(retryAfter ? retryAfter * 1000 : Math.min(1000 * 2 ** attempt, 20_000) + Math.random() * 1000, 30_000);
+      window.dispatchEvent(new CustomEvent('paisabook:ratelimit', { detail: { status: res.status, waitMs: wait, attempt } }));
+      await new Promise((r, rej) => {
+        const t = setTimeout(r, wait);
+        init.signal?.addEventListener('abort', () => {
+          clearTimeout(t);
+          rej(new DOMException('aborted', 'AbortError'));
+        }, { once: true });
+      });
       continue;
     }
     if (!res.ok) {
