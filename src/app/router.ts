@@ -16,12 +16,21 @@ export function route(path: string, view: View): void {
   routes.set(path, view);
 }
 
+/* Material Symbols paths (Apache 2.0) */
+const ICONS = {
+  home: 'M6 19h3v-6h6v6h3v-9l-6-4.5L6 10v9Zm-2 2V9l8-6 8 6v12h-7v-6h-2v6H4Z',
+  receipt: 'M4 22V2l1.5 1.5L7 2l1.5 1.5L10 2l1.5 1.5L13 2l1.5 1.5L16 2l1.5 1.5L19 2l1.5 1.5L22 2v20l-1.5-1.5L19 22l-1.5-1.5L16 22l-1.5-1.5L13 22l-1.5-1.5L10 22l-1.5-1.5L7 22l-1.5-1.5L4 22Zm3-5h10v-2H7v2Zm0-4h10v-2H7v2Zm0-4h10V7H7v2Z',
+  sync: 'M12 20q-3.35 0-5.675-2.325T4 12q0-3.35 2.325-5.675T12 4q1.725 0 3.3.713T18 6.75V4h2v7h-7V9h4.2q-.8-1.4-2.187-2.2T12 6Q9.5 6 7.75 7.75T6 12q0 2.5 1.75 4.25T12 18q1.925 0 3.475-1.1T17.65 14h2.1q-.7 2.65-2.85 4.325T12 20Z',
+  bank: 'M4 20v-2h16v2H4Zm1-3v-7h2v7H5Zm4 0v-7h2v7H9Zm4 0v-7h2v7h-2Zm4 0v-7h2v7h-2ZM3 8V6l9-4.5L21 6v2H3Z',
+  more: 'M6 14q-.825 0-1.412-.588T4 12q0-.825.588-1.413T6 10q.825 0 1.413.587T8 12q0 .825-.587 1.412T6 14Zm6 0q-.825 0-1.412-.588T10 12q0-.825.588-1.413T12 10q.825 0 1.413.587T14 12q0 .825-.587 1.412T12 14Zm6 0q-.825 0-1.412-.588T16 12q0-.825.588-1.413T18 10q.825 0 1.413.587T20 12q0 .825-.587 1.412T18 14Z',
+};
+const svg = (d: string) => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${d}"/></svg>`;
 const NAV: Array<{ path: string; label: string; icon: string }> = [
-  { path: '/', label: 'Home', icon: '⌂' },
-  { path: '/txns', label: 'Ledger', icon: '☰' },
-  { path: '/sync', label: 'Sync', icon: '⟳' },
-  { path: '/accounts', label: 'Accounts', icon: '▤' },
-  { path: '/more', label: 'More', icon: '⋯' },
+  { path: '/', label: 'Home', icon: svg(ICONS.home) },
+  { path: '/txns', label: 'Ledger', icon: svg(ICONS.receipt) },
+  { path: '/sync', label: 'Sync', icon: svg(ICONS.sync) },
+  { path: '/accounts', label: 'Accounts', icon: svg(ICONS.bank) },
+  { path: '/more', label: 'More', icon: svg(ICONS.more) },
 ];
 
 let cleanup: (() => void) | void;
