@@ -9,7 +9,7 @@ import { parseSpreadsheetId } from '../google/sheets';
 import { scanMailbox } from '../core/extract';
 import { discoverAccounts, type AccountProposal } from '../core/discover';
 import { discoverHeuristically } from '../core/heuristics';
-import { addAccount } from '../core/accounts';
+import { addAccount, addAccounts } from '../core/accounts';
 import { daysAgoIso, todayIso } from '../core/dates';
 import { escapeHtml } from '../core/text';
 
@@ -238,22 +238,37 @@ function wire(root: HTMLElement, step: Step): void {
         window.removeEventListener('paisabook:ratelimit', onLimit);
       }
     },
-    'skip-accounts': async () => {
-      await saveSelf(root);
+    'skip-accounts': async (el) => {
+      el.setAttribute('disabled', '');
+      await saveSelf(root).catch(() => {});
       saveSettings({ setupDone: true });
       navigate('/accounts');
     },
     'add-selected': async (el) => {
-      await saveSelf(root);
       const box = el.closest<HTMLElement>('#discover-status')!;
       const picks = [...box.querySelectorAll<HTMLInputElement>('input[type=checkbox]:checked')];
-      for (const p of picks) {
-        const d = JSON.parse(p.dataset.proposal!) as AccountProposal;
-        await addAccount({ kind: d.kind, institution: d.institution, account_ref: d.last4 ? `XX${d.last4}` : '', statement_sender: d.statement_sender });
+      if (!picks.length) return toast('Tick at least one account, or skip', 'error');
+      const buttons = [...box.querySelectorAll<HTMLButtonElement>('button')];
+      buttons.forEach((b) => b.setAttribute('disabled', ''));
+      const busy = document.createElement('div');
+      busy.innerHTML = spinner(`Adding ${picks.length} account${picks.length > 1 ? 's' : ''} to your sheet…`);
+      box.appendChild(busy);
+      try {
+        await saveSelf(root);
+        await addAccounts(
+          picks.map((p) => {
+            const d = JSON.parse(p.dataset.proposal!) as AccountProposal;
+            return { kind: d.kind, institution: d.institution, account_ref: d.last4 ? `XX${d.last4}` : '', statement_sender: d.statement_sender };
+          }),
+        );
+        toast(`${picks.length} accounts added`, 'ok');
+        saveSettings({ setupDone: true });
+        navigate('/setup?step=done');
+      } catch (err) {
+        busy.remove();
+        buttons.forEach((b) => b.removeAttribute('disabled'));
+        toast(`Couldn't add accounts: ${String((err as Error).message)}`, 'error');
       }
-      toast(`${picks.length} accounts added`, 'ok');
-      saveSettings({ setupDone: true });
-      navigate('/setup?step=done');
     },
     'add-manual': async () => {
       const r = await modal(

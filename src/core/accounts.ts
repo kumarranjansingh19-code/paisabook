@@ -31,27 +31,40 @@ export function instKey(institution: string): string {
   return institution.toUpperCase().replace(/\s+(BANK|LTD|LIMITED|CREDIT CARD|CARD)\b.*$/i, '').trim().split(/\s+/)[0] ?? institution.toUpperCase();
 }
 
-export async function addAccount(a: {
+export interface NewAccount {
   kind: AccountKind;
   institution: string;
   display_name?: string;
   account_ref?: string;
   statement_sender?: string;
   password_hint?: string;
-}): Promise<Account> {
-  const rec: Account = {
+}
+
+function buildAccount(a: NewAccount): Account {
+  return {
     id: newId('acc'),
     kind: a.kind,
     institution: normalizeInstitution(a.institution),
-    display_name: (a.display_name?.trim() || defaultName(a.kind, a.institution, a.account_ref ?? '')),
+    display_name: a.display_name?.trim() || defaultName(a.kind, a.institution, a.account_ref ?? ''),
     account_ref: a.account_ref?.trim() ?? '',
     statement_sender: a.statement_sender ?? '',
     password_hint: a.password_hint ?? '',
     is_active: true,
     created_at: stamp(),
   };
+}
+
+export async function addAccount(a: NewAccount): Promise<Account> {
+  const rec = buildAccount(a);
   await db.append(db.accounts, [rec]);
   return rec;
+}
+
+/** Several at once = one sheet write (the wizard's "Add selected"). */
+export async function addAccounts(list: NewAccount[]): Promise<Account[]> {
+  const recs = list.map(buildAccount);
+  await db.append(db.accounts, recs);
+  return recs;
 }
 
 /** "The Federal Bank Ltd." → "Federal Bank"; "STATE BANK OF INDIA" → "SBI"; "HDFC BANK LIMITED" → "HDFC Bank". */

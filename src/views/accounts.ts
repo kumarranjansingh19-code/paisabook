@@ -48,10 +48,18 @@ export const accountsView: View = {
       },
       'add-proposal': async (el) => {
         const p = JSON.parse(el.dataset.p!) as { kind: 'bank' | 'credit_card'; institution: string; last4: string; statement_sender: string };
-        await addAccount({ kind: p.kind, institution: p.institution, account_ref: p.last4 ? `XX${p.last4}` : '', statement_sender: p.statement_sender });
-        el.closest('.list-item')?.remove();
-        const n = await rehomeUnmatched();
-        toast(`Added${n ? ` · ${n} alerts attached` : ''}`, 'ok');
+        el.setAttribute('disabled', '');
+        el.textContent = 'Adding…';
+        try {
+          await addAccount({ kind: p.kind, institution: p.institution, account_ref: p.last4 ? `XX${p.last4}` : '', statement_sender: p.statement_sender });
+          el.closest('.list-item')?.remove();
+          const n = await rehomeUnmatched();
+          toast(`Added${n ? ` · ${n} alerts attached` : ''}`, 'ok');
+        } catch (err) {
+          el.removeAttribute('disabled');
+          el.textContent = 'Add';
+          toast(String((err as Error).message), 'error');
+        }
       },
       'add-from-hint': async (el) => {
         const hint = el.dataset.hint!;
