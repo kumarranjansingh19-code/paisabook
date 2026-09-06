@@ -46,7 +46,7 @@ describe('parseAlert', () => {
     expect(neft!.narration).toBe('Ranjan Kumar Singh');
   });
   it('reads a CRED bill-payment confirmation as a credit on the card', () => {
-    const a = parseAlert(mail('CRED <protect@cred.club>', 'your credit card bill payment was successful', 'hey, your credit card bill payment was successful. ₹6,495.00 paid to YES Bank •••• 5764 on 20 Aug 2026. ref YDZJ6QQ1X3R. you earned 649 CRED coins.'));
+    const a = parseAlert({ ...mail('CRED <protect@cred.club>', 'your credit card bill payment was successful', 'hey, your credit card bill payment was successful. ₹6,495.00 paid to YES Bank •••• 5764 on 20 Aug 2026. ref YDZJ6QQ1X3R. you earned 649 CRED coins.'), receivedAt: '2026-08-20T09:00:00.000Z' });
     expect(a).toMatchObject({ direction: 'credit', amount: '6,495.00', account_kind: 'credit_card', date: '2026-08-20' });
     expect(a!.account_hint).toContain('5764');
     expect(a!.narration).toMatch(/Card bill payment/);
