@@ -4,6 +4,7 @@ import { db } from '../store/db';
 import { availableMonths, inMonth, monthlyCashflow, settlement, spendByAccount, spendByCategory, topMerchants, upcomingBills } from '../core/analytics';
 import { addMonths, daysAgoIso, monthLabel, monthOf, todayIso } from '../core/dates';
 import { loadPendingFromSheet, onSync, runSync, syncState } from '../core/sync';
+import { learnedSenders } from '../core/extract';
 import { unmatchedHints } from '../core/accounts';
 
 let month = monthOf(todayIso());
@@ -36,8 +37,11 @@ export const dashboardView: View = {
         // Incremental: from two days before the last sync's end (overlap is free — processed mail is skipped) to today.
         const lastTo = db.getSetting('last_sync_to');
         const from = lastTo ? shiftDays(lastTo, -2) : daysAgoIso(30);
-        toast(lastTo ? `Fetching mail since ${from}…` : 'No previous sync — fetching the last 30 days…');
-        void runSync({ from, to: todayIso() });
+        // Once the app has seen which senders matter, a refresh reads only those.
+        const senders = learnedSenders();
+        const targeted = senders.length >= 3;
+        toast(lastTo ? `Fetching mail since ${from}${targeted ? ` from ${senders.length} known senders` : ''}…` : 'No previous sync — fetching the last 30 days…');
+        void runSync({ from, to: todayIso(), senders: targeted ? senders : undefined });
       },
     });
     const offSync = onSync(() => {

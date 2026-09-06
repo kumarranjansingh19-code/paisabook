@@ -20,6 +20,8 @@ export interface SyncOptions {
   reprocess?: boolean;
   /** read every email's headers instead of letting Gmail pre-filter for money-related mail */
   broad?: boolean;
+  /** read only these sender addresses (the cheap refresh once accounts are known) */
+  senders?: string[];
   forceStatements?: boolean;
   skipCategorize?: boolean;
 }
@@ -96,8 +98,8 @@ export async function runSync(opts: SyncOptions): Promise<void> {
   };
   window.addEventListener('paisabook:ratelimit', onLimit);
   try {
-    log(`Scanning ${opts.from} → ${opts.to}${opts.reprocess ? ' (re-reading processed mail)' : ''}`);
-    const scan = await scanMailbox(opts.from, opts.to, { reprocess: opts.reprocess, broad: opts.broad, onProgress, signal });
+    log(`Scanning ${opts.from} → ${opts.to}${opts.senders?.length ? ` · ${opts.senders.length} known senders only` : opts.broad ? ' · every email' : ' · money-related search'}${opts.reprocess ? ' (re-reading processed mail)' : ''}`);
+    const scan = await scanMailbox(opts.from, opts.to, { reprocess: opts.reprocess, broad: opts.broad, senders: opts.senders, onProgress, signal });
     syncState.lastEmails = scan.emails;
     syncState.summary.emails_in_range = scan.listed;
     syncState.summary.candidates = scan.candidates;

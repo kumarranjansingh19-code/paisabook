@@ -59,10 +59,36 @@ const FOCUSED_TERMS =
 /** Senders only — enough for account discovery, a fraction of the mail. */
 const SENDER_TERMS = 'from:(bank OR card OR alerts OR alert OR statement OR statements OR jupiter OR onecard OR slice OR sbicard OR hdfcbank OR icicibank OR axisbank OR kotak OR federalbank OR yesbank OR idfcfirst OR indusind)';
 
-export function buildQuery(from: string, to: string, broad = false, sendersOnly = false): string {
+export function buildQuery(from: string, to: string, broad = false, sendersOnly = false, senders?: string[]): string {
   const extra = settings().gmailExtraQuery.trim();
-  const terms = sendersOnly ? ` ${SENDER_TERMS}` : broad ? '' : ` ${FOCUSED_TERMS}`;
+  const terms = senders?.length
+    ? ` from:(${senders.map((s) => (/\s/.test(s) ? `"${s}"` : s)).join(' OR ')})`
+    : sendersOnly
+      ? ` ${SENDER_TERMS}`
+      : broad
+        ? ''
+        : ` ${FOCUSED_TERMS}`;
   return `after:${gmailDate(from)} before:${gmailDate(to, 1)} -in:spam -in:trash -category:social -category:forums${terms}${extra ? ` ${extra}` : ''}`;
+}
+
+const USEFUL_OUTCOMES = /^(inserted|duplicate|unmatched|pdf_queued|bill_recorded|statement_already_imported)/;
+
+/**
+ * Senders that have actually produced ledger data for this user: alert
+ * relays, statement mailers, bill notices, plus each account's statement
+ * sender. Once known, a refresh asks Gmail only for these — a fraction of
+ * the mail, no discovery, no second guessing.
+ */
+export function learnedSenders(): string[] {
+  const score = new Map<string, number>();
+  for (const e of db.emails.rows) {
+    if (!USEFUL_OUTCOMES.test(e.outcome) || e.kind === 'other' || e.kind === 'skipped') continue;
+    const addr = emailAddress(e.from);
+    if (!addr.includes('@')) continue;
+    score.set(addr, (score.get(addr) ?? 0) + 1);
+  }
+  for (const a of db.activeAccounts()) if (a.statement_sender) score.set(a.statement_sender.toLowerCase(), (score.get(a.statement_sender.toLowerCase()) ?? 0) + 5);
+  return [...score.entries()].sort((a, b) => b[1] - a[1]).slice(0, 40).map(([addr]) => addr);
 }
 
 export interface ScanProgress {
@@ -144,12 +170,14 @@ export async function scanMailbox(
     maxEmails?: number;
     /** only mail from bank-ish senders (discovery) */
     sendersOnly?: boolean;
+    /** exact sender addresses to read (refresh after setup) */
+    senders?: string[];
     onProgress?: (p: ScanProgress) => void;
     signal?: AbortSignal;
   } = {},
 ): Promise<ScanResult> {
   const p = opts.onProgress ?? (() => {});
-  const key = `${scanKey(from, to, opts.broad, opts.reprocess)}|${opts.sendersOnly ? 's' : ''}${opts.maxEmails ?? ''}`;
+  const key = `${scanKey(from, to, opts.broad, opts.reprocess)}|${opts.sendersOnly ? 's' : ''}${opts.maxEmails ?? ''}|${opts.senders?.length ?? 0}`;
   let ck = scanCheckpoint();
   if (ck && ck.key !== key) ck = null;
 
@@ -158,11 +186,33 @@ export async function scanMailbox(
     ids = ck.ids;
   } else {
     p({ phase: 'Listing mail', done: 0, total: 0 });
-    ids = await listMessageIds(buildQuery(from, to, opts.broad, opts.sendersOnly), opts.maxEmails ?? 8000, opts.signal);
+    ids = await listMessageIds(buildQuery(from, to, opts.broad, opts.sendersOnly, opts.senders), opts.maxEmails ?? 8000, opts.signal);
     ck = { key, from, to, ids, metas: [], savedAt: '' };
     saveCheckpoint(ck);
   }
   const fresh = opts.reprocess ? ids : ids.filter((id) => !db.emails.has(id));
+  // Mail from known senders is by definition worth reading: skip the header pass and go straight to bodies.
+  if (opts.senders?.length && !opts.metaOnly) {
+    p({ phase: 'Reading bank mail', done: 0, total: fresh.length, note: `${ids.length} from ${opts.senders.length} known senders` });
+    const cachedFull = await getCachedEmails(fresh);
+    const emails: FetchedEmail[] = [...cachedFull.values()];
+    let interrupted: string | undefined;
+    try {
+      await fetchFull(fresh.filter((id) => !cachedFull.has(id)), {
+        signal: opts.signal,
+        onBatch: (es) => {
+          emails.push(...es);
+          void putCachedEmails(es);
+        },
+        onProgress: (n) => p({ phase: 'Reading bank mail', done: cachedFull.size + n, total: fresh.length }),
+      });
+    } catch (err) {
+      if (isAbort(err)) throw err;
+      interrupted = String((err as Error).message ?? err);
+    }
+    if (!interrupted) clearScanCheckpoint();
+    return { listed: ids.length, alreadyDone: ids.length - fresh.length, read: emails.length, total: fresh.length, candidates: emails.length, emails, ...(interrupted ? { interrupted } : {}) };
+  }
   const have = new Map(ck.metas.map((m) => [m.id, m]));
   // Headers downloaded in any earlier scan (discovery, an interrupted run) are served from the device cache.
   for (const [id, m] of await getCachedMetas(fresh.filter((id) => !have.has(id)))) have.set(id, m);

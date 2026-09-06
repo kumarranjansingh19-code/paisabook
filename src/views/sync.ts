@@ -6,7 +6,7 @@ import { escapeHtml } from '../core/text';
 import { daysAgoIso, todayIso } from '../core/dates';
 import { categorizeAll } from '../core/categorize';
 import { usage } from '../llm/gemini';
-import { scanCheckpoint } from '../core/extract';
+import { learnedSenders, scanCheckpoint } from '../core/extract';
 import { dedupeAlerts } from '../core/reconcile';
 
 let period = defaultPeriod(3);
@@ -38,9 +38,9 @@ export const syncView: View = {
       run: () => {
         const reprocess = root.querySelector<HTMLInputElement>('input[name=reprocess]')!.checked;
         const force = root.querySelector<HTMLInputElement>('input[name=force]')!.checked;
-        const broad = root.querySelector<HTMLInputElement>('input[name=broad]')!.checked;
+        const scope = root.querySelector<HTMLSelectElement>('select[name=scope]')!.value;
         if (period.from > period.to) return toast('"From" must be before "To"', 'error');
-        void runSync({ from: period.from, to: period.to, reprocess, broad, forceStatements: force });
+        void runSync({ from: period.from, to: period.to, reprocess, broad: scope === 'broad', senders: scope === 'known' ? learnedSenders() : undefined, forceStatements: force });
       },
       stop: () => abortSync(),
       'fetch-statements': () => {
@@ -93,7 +93,13 @@ function page(): string {
       </div>
       <label class="check"><input type="checkbox" name="reprocess" /> Re-read emails already processed in this period (after adding accounts, or to fix misses)</label>
       <label class="check"><input type="checkbox" name="force" /> Re-import statements already imported (replaces their rows)</label>
-      <label class="check"><input type="checkbox" name="broad" /> Broad scan: read every email's headers instead of Gmail's money-related search (slower, catches odd senders)</label>
+      <label class="field">What to read
+        <select name="scope">
+          <option value="known" ${learnedSenders().length >= 3 ? 'selected' : 'disabled'}>Known bank senders only — fastest (${learnedSenders().length} senders learned so far)</option>
+          <option value="focused" ${learnedSenders().length < 3 ? 'selected' : ''}>Money-related search — finds new senders (default for the first syncs)</option>
+          <option value="broad">Every email — slowest, catches odd senders</option>
+        </select>
+      </label>
       <div id="status">${raw(status())}</div>
     </div>
     <div class="card">
