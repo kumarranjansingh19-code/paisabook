@@ -16,7 +16,7 @@ export function passwordCandidates(r: Recipe, hint = '', cardLast4 = ''): string
   const add = (s: string) => {
     if (s && s.length >= 4) out.add(s);
   };
-  const [y, m, d] = r.dob ? r.dob.split('-') : ['', '', ''];
+  const [y = '', m = '', d = ''] = r.dob ? r.dob.split('-') : ['', '', ''];
   const yy = y.slice(-2);
   const pan = r.pan.trim();
   const mob = r.mobile.replace(/\D/g, '');
