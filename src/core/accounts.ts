@@ -42,7 +42,7 @@ export async function addAccount(a: {
   const rec: Account = {
     id: newId('acc'),
     kind: a.kind,
-    institution: a.institution.trim(),
+    institution: normalizeInstitution(a.institution),
     display_name: (a.display_name?.trim() || defaultName(a.kind, a.institution, a.account_ref ?? '')),
     account_ref: a.account_ref?.trim() ?? '',
     statement_sender: a.statement_sender ?? '',
@@ -54,10 +54,19 @@ export async function addAccount(a: {
   return rec;
 }
 
+/** "The Federal Bank Ltd." → "Federal Bank"; "STATE BANK OF INDIA" → "SBI"; "HDFC BANK LIMITED" → "HDFC Bank". */
+export function normalizeInstitution(raw: string): string {
+  let s = raw.trim().replace(/^the\s+/i, '').replace(/[,.]?\s*(ltd\.?|limited|pvt\.?|private)\s*\.?$/i, '').trim();
+  if (/^state bank of india$/i.test(s)) return 'SBI';
+  if (s === s.toUpperCase() && s.length > 4) s = s.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase()).replace(/\b(Hdfc|Icici|Sbi|Idfc|Rbl|Yes|Au|Dbs|Csb|Hsbc|Pnb|Idbi)\b/g, (m) => m.toUpperCase());
+  return s;
+}
+
 export function defaultName(kind: AccountKind, institution: string, ref: string): string {
   const last4 = ref.match(/\d{4,}/)?.[0]?.slice(-4);
-  const what = kind === 'credit_card' ? 'Card' : kind === 'bank' ? 'Bank' : kind === 'cash' ? 'Cash' : kind === 'wallet' ? 'Wallet' : '';
-  return [institution.trim(), what, last4 ? `••${last4}` : ''].filter(Boolean).join(' ');
+  const inst = normalizeInstitution(institution);
+  const what = kind === 'credit_card' ? (/card$/i.test(inst) ? '' : 'Card') : kind === 'bank' ? (/bank$/i.test(inst) ? '' : 'Bank') : kind === 'cash' ? 'Cash' : kind === 'wallet' ? 'Wallet' : '';
+  return [inst, what, last4 ? `••${last4}` : ''].filter(Boolean).join(' ');
 }
 
 /**
