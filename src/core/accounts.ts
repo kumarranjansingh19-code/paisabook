@@ -66,7 +66,7 @@ export function defaultName(kind: AccountKind, institution: string, ref: string)
   const last4 = ref.match(/\d{4,}/)?.[0]?.slice(-4);
   const inst = normalizeInstitution(institution);
   const what = kind === 'credit_card' ? (/card$/i.test(inst) ? '' : 'Card') : kind === 'bank' ? (/bank$/i.test(inst) ? '' : 'Bank') : kind === 'cash' ? 'Cash' : kind === 'wallet' ? 'Wallet' : '';
-  return [inst, what, last4 ? `••${last4}` : ''].filter(Boolean).join(' ');
+  return [inst, what, last4 ? `XX${last4}` : ''].filter(Boolean).join(' ');
 }
 
 /**
