@@ -5,6 +5,7 @@ import { categoryNames, categoryPromptBlock, withCategoryEnum } from './categori
 import { ruleNorm } from './fingerprint';
 import { formatPaise } from './money';
 import { chunk } from './pool';
+import { daysBetween } from './dates';
 
 const BATCH_SIZE = 40;
 
@@ -26,6 +27,60 @@ export function applyRules(): number {
         n++;
       }
       break;
+    }
+  }
+  return n;
+}
+
+const NOT_A_TRANSFER = /dividend|interest|salary|refund|cashback|reversal|payout/i;
+const isBankish = (k: string) => k === 'bank' || k === 'cash' || k === 'wallet';
+
+/**
+ * Money moved between the user's own accounts leaves an equal debit in one
+ * and a credit in another within a couple of days. Pair them deterministically
+ * — bank→bank is a self_transfer, bank→card is a cc_payment — so a model never
+ * gets to call one side "salary" and the other "investment". A narration that
+ * carries the user's own name is a self_transfer too (the other account may
+ * not be tracked). User picks are never overridden.
+ */
+export function pairOwnTransfers(): number {
+  const kindOf = (id: string) => db.accounts.get(id)?.kind ?? 'other';
+  const live = db.liveTransactions().filter((t) => t.account_id);
+  const paired = new Set<string>();
+  let n = 0;
+  const setCat = (t: Transaction, category: string) => {
+    if (t.categorized_by === 'user' || t.category === category) return;
+    db.update(db.transactions, t.id, { category, categorized_by: 'rule' });
+    n++;
+  };
+  // A card-bill credit can arrive under a mask we filed as a bank account; the words still say "card".
+  const cardish = (t: Transaction) => kindOf(t.account_id) === 'credit_card' || t.category === 'cc_payment' || /\bcard\b/i.test(t.narration);
+  for (const d of live) {
+    if (d.direction !== 'debit' || !isBankish(kindOf(d.account_id)) || d.amount_paise < 50000) continue;
+    const c = live.find(
+      (x) =>
+        !paired.has(x.id) &&
+        x.direction === 'credit' &&
+        x.account_id !== d.account_id &&
+        x.amount_paise === d.amount_paise &&
+        Math.abs(daysBetween(x.posted_at, d.posted_at)) <= 2 &&
+        kindOf(x.account_id) !== 'other' &&
+        !NOT_A_TRANSFER.test(x.narration),
+    );
+    if (!c) continue;
+    paired.add(c.id);
+    paired.add(d.id);
+    const category = cardish(c) || cardish(d) ? 'cc_payment' : 'self_transfer';
+    setCat(d, category);
+    setCat(c, category);
+  }
+  const self = db.family.rows.find((f) => f.relation === 'self')?.name ?? '';
+  const tokens = self.toLowerCase().split(/\s+/).filter((w) => w.length >= 3);
+  if (tokens.length >= 2) {
+    for (const t of live) {
+      if (paired.has(t.id) || !isBankish(kindOf(t.account_id))) continue;
+      const narr = t.narration.toLowerCase();
+      if (tokens.filter((w) => narr.includes(w)).length >= 2) setCat(t, 'self_transfer');
     }
   }
   return n;
@@ -91,7 +146,7 @@ export interface CategorizeProgress {
 
 /** Categorize uncategorized live transactions: rules, then LLM in batches. */
 export async function categorizeAll(onProgress?: CategorizeProgress, signal?: AbortSignal): Promise<{ byRule: number; byLlm: number }> {
-  const byRule = applyRules();
+  const byRule = applyRules() + pairOwnTransfers();
   await db.flush();
   const todo = db.liveTransactions().filter((t) => !t.category && t.status !== 'unmatched');
   let byLlm = 0;
@@ -124,6 +179,8 @@ export async function categorizeAll(onProgress?: CategorizeProgress, signal?: Ab
     await db.flush();
     onProgress?.(byLlm, todo.length);
   }
+  // the model may still have split a transfer into "salary" + "investment": pair again
+  if (byLlm && pairOwnTransfers()) await db.flush();
   const promoted = promoteStablePatterns();
   if (promoted.length) await db.append(db.rules, promoted);
   if (promoted.length) {
