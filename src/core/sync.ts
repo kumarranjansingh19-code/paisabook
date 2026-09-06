@@ -153,10 +153,74 @@ export async function runSync(opts: SyncOptions): Promise<void> {
   }
 }
 
+/**
+ * The waiting queue is mirrored into the statements tab (status queued /
+ * needs_password / needs_account, no bytes) so a reload, another device or a
+ * later session can still see and resolve those PDFs.
+ */
+const pendId = (p: PendingPdf) => `pend_${p.emailId || 'local'}_${(p.attachmentId ?? p.sha).slice(0, 16)}`;
+
+async function persistPending(pdf: PendingPdf, status: 'queued' | 'needs_password' | 'needs_account', note = ''): Promise<void> {
+  if (!pdf.emailId || !pdf.attachmentId) return; // local files can't be re-downloaded — nothing to persist
+  const id = pendId(pdf);
+  const notes = JSON.stringify({ attachmentId: pdf.attachmentId, from: pdf.from, subject: pdf.subject, hint: pdf.hint, note });
+  if (db.statements.has(id)) {
+    db.update(db.statements, id, { status, notes, account_id: pdf.accountGuess });
+    await db.flush();
+  } else {
+    await db.append(db.statements, [
+      { id, account_id: pdf.accountGuess, kind: /card/i.test(pdf.subject) ? 'credit_card' : 'bank', period_start: '', period_end: '', txn_count: 0, inserted: 0, matched: 0, total_due_paise: 0, due_date: '', source: pdf.filename, email_id: pdf.emailId, status, notes, imported_at: new Date().toISOString() },
+    ]);
+  }
+}
+
+async function resolvePending(pdf: PendingPdf): Promise<void> {
+  const id = pendId(pdf);
+  if (db.statements.has(id)) {
+    db.update(db.statements, id, { status: 'superseded' });
+    await db.flush();
+  }
+}
+
+/** Rebuild the in-memory queue from the sheet (called when the Sync page opens and before a sync). */
+export function loadPendingFromSheet(): number {
+  const known = new Set(syncState.pendingPdfs.map((p) => p.sha));
+  let n = 0;
+  for (const s of db.statements.rows) {
+    if (s.status !== 'queued' && s.status !== 'needs_password' && s.status !== 'needs_account') continue;
+    let meta: { attachmentId?: string; from?: string; subject?: string; hint?: string | null; note?: string } = {};
+    try {
+      meta = JSON.parse(s.notes || '{}');
+    } catch {
+      /* ignore */
+    }
+    if (!meta.attachmentId || !s.email_id) continue;
+    const sha = s.id; // provisional identity until the bytes are back
+    if (known.has(sha) || syncState.pendingPdfs.some((p) => p.emailId === s.email_id && p.attachmentId === meta.attachmentId)) continue;
+    syncState.pendingPdfs.push({
+      sha,
+      filename: s.source,
+      attachmentId: meta.attachmentId,
+      emailId: s.email_id,
+      from: meta.from ?? '',
+      subject: meta.subject ?? '',
+      receivedAt: s.imported_at,
+      hint: meta.hint ?? null,
+      accountGuess: s.account_id,
+      lastError: s.status === 'needs_password' ? 'needs password' : s.status === 'needs_account' ? (meta.note || 'no matching account') : undefined,
+    });
+    n++;
+  }
+  if (n) emit();
+  return n;
+}
+
 /** Import every queued PDF we can open; leave the rest queued with a reason. */
 export async function importPending(opts: { force?: boolean; signal?: AbortSignal } = {}): Promise<void> {
+  loadPendingFromSheet();
   const queue = [...syncState.pendingPdfs];
   if (!queue.length) return;
+  for (const pdf of queue) if (!db.statements.has(pendId(pdf))) await persistPending(pdf, 'queued');
   let n = 0;
   syncState.phase = 'Importing statements';
   syncState.progress = { phase: 'Importing statements', done: 0, total: queue.length };
@@ -182,6 +246,7 @@ export async function importPending(opts: { force?: boolean; signal?: AbortSigna
 export function applyOutcome(pdf: PendingPdf, res: ImportOutcome): void {
   const drop = () => {
     syncState.pendingPdfs = syncState.pendingPdfs.filter((p) => p.sha !== pdf.sha);
+    void resolvePending(pdf);
   };
   switch (res.status) {
     case 'imported': {
@@ -200,11 +265,13 @@ export function applyOutcome(pdf: PendingPdf, res: ImportOutcome): void {
     case 'needs_password':
       pdf.lastError = 'needs password';
       log(`🔒 ${pdf.filename} needs a password${res.hint ? ` (hint: ${res.hint})` : ''}`);
+      void persistPending(pdf, 'needs_password');
       break;
     case 'needs_account':
       pdf.lastError = `no account for "${res.hint}"`;
       pdf.accountGuess = '';
       log(`❓ ${pdf.filename}: no account matches "${res.hint}" — add it under Accounts, then retry`);
+      void persistPending(pdf, 'needs_account', `no account for "${res.hint}"`);
       break;
     case 'failed':
       pdf.lastError = res.reason;
@@ -243,6 +310,8 @@ export async function queueLocalPdf(file: File): Promise<PendingPdf> {
 }
 
 export function dropPdf(sha: string): void {
+  const pdf = syncState.pendingPdfs.find((p) => p.sha === sha);
   syncState.pendingPdfs = syncState.pendingPdfs.filter((p) => p.sha !== sha);
+  if (pdf) void resolvePending(pdf);
   emit();
 }

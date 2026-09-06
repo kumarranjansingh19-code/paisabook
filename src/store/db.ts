@@ -60,7 +60,8 @@ export interface Statement {
   due_date: string;
   source: string; // filename / email subject
   email_id: string;
-  status: 'imported' | 'needs_review' | 'failed' | 'bill_only' | 'superseded';
+  /** queued / needs_password / needs_account = a PDF waiting for the user (persisted so a reload can't lose it) */
+  status: 'imported' | 'needs_review' | 'failed' | 'bill_only' | 'superseded' | 'queued' | 'needs_password' | 'needs_account';
   notes: string;
   imported_at: string;
 }

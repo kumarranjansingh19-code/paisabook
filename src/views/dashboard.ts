@@ -3,7 +3,7 @@ import { html, raw, money, onAction, catLabel, pct } from '../app/ui';
 import { db } from '../store/db';
 import { availableMonths, inMonth, monthlyCashflow, settlement, spendByAccount, spendByCategory, topMerchants, upcomingBills } from '../core/analytics';
 import { addMonths, monthLabel, monthOf, todayIso } from '../core/dates';
-import { syncState } from '../core/sync';
+import { loadPendingFromSheet, syncState } from '../core/sync';
 import { unmatchedHints } from '../core/accounts';
 
 let month = monthOf(todayIso());
@@ -37,6 +37,7 @@ export const dashboardView: View = {
 };
 
 function page(): string {
+  loadPendingFromSheet();
   const live = db.liveTransactions().filter((t) => t.status !== 'unmatched');
   if (!live.length) return empty();
   const rows = inMonth(live, month);
@@ -63,13 +64,17 @@ function page(): string {
     ${!months.includes(month) ? raw('<p class="muted center small">No transactions in this month yet.</p>') : ''}
     <div class="grid">
       <div class="stat"><div class="label">Real spend</div><div class="value">${money(spend, true)}</div>
-        <div class="sub">${settle.settled ? raw('<span class="pill ok">✓ settled</span>') : raw(`<span class="pill warn">⏳ awaiting ${settle.awaiting.map((a) => a.split(' ')[0]).join(', ')}</span>`)}
+        <div class="sub">${settle.settled ? raw('<span class="pill ok">✓ settled</span>') : raw(`<span class="pill warn" title="Card spends are final only once the statement covering the month end is imported">⏳ ${settle.awaiting.length} card statement${settle.awaiting.length > 1 ? 's' : ''} pending</span>`)}
         ${prevFlow ? raw(`<span class="muted"> · ${delta(spend, prevFlow.spent_paise)} vs last month</span>`) : ''}</div></div>
       <div class="stat"><div class="label">Income</div><div class="value">${money(thisFlow?.income_paise ?? 0, true)}</div><div class="sub">${thisFlow?.salary_paise ? `salary ${money(thisFlow.salary_paise, true)}` : 'into bank accounts'}</div></div>
       <div class="stat"><div class="label">Invested</div><div class="value">${money(thisFlow?.invested_paise ?? 0, true)}</div><div class="sub">family ${money(thisFlow?.family_paise ?? 0, true)}</div></div>
       <div class="stat ${(thisFlow?.net_paise ?? 0) >= 0 ? 'good' : 'bad'}"><div class="label">Net</div><div class="value">${money(thisFlow?.net_paise ?? 0, true)}</div><div class="sub">cash ${money(thisFlow?.cash_net_paise ?? 0, true)} · card bills ${money(thisFlow?.cc_payment_paise ?? 0, true)}</div></div>
     </div>
 
+    ${!settle.settled
+      ? raw(`<div class="card small" style="background:var(--md-surface-container-low);box-shadow:none"><strong>Why ${escape(monthLabel(month))} isn't settled yet:</strong> a card's spends for a month are confirmed by the statement whose period ends on or after the last day of that month — usually the one generated the following month.
+          Still to import for: ${settle.awaiting.map(escape).join(', ')}. ${syncState.pendingPdfs.length ? `<a href="#/sync">${syncState.pendingPdfs.length} statement PDF${syncState.pendingPdfs.length > 1 ? 's are' : ' is'} waiting for a password</a>.` : `Run a <a href="#/sync">sync</a> over the following month so those statement emails are picked up.`}</div>`)
+      : ''}
     ${review || unmatched.length || syncState.pendingPdfs.length
       ? raw(`<div class="card warn small">
           ${review ? `<div>⚠ <a href="#/txns?status=needs_review">${review} alerts</a> weren't found on a statement — confirm or mark duplicate.</div>` : ''}

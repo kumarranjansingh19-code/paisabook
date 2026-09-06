@@ -8,12 +8,15 @@ import { parseAmountToPaise } from './money';
 import { emailAddress, redactPii } from './text';
 import { sha256HexAsync } from './hash';
 import { settings, saveSettings } from '../store/local';
+import { downloadAttachment } from '../google/gmail';
 
 export interface PendingPdf {
   /** stable id = sha256 of the bytes */
   sha: string;
   filename: string;
-  data: Uint8Array;
+  /** absent when restored from the sheet — re-downloaded from Gmail on demand */
+  data?: Uint8Array;
+  attachmentId?: string;
   emailId: string;
   from: string;
   subject: string;
@@ -84,6 +87,14 @@ export async function importStatement(
     await db.flush();
   }
 
+  if (!pdf.data) {
+    if (!pdf.emailId || !pdf.attachmentId) return { status: 'failed', reason: 'PDF bytes are gone and there is no email to re-download from' };
+    try {
+      pdf.data = await downloadAttachment(pdf.emailId, pdf.attachmentId);
+    } catch (err) {
+      return { status: 'failed', reason: `could not re-download from Gmail: ${String((err as Error).message)}` };
+    }
+  }
   let text: string;
   let passwordAccount: Account | null;
   try {

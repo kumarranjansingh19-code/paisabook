@@ -120,7 +120,7 @@ export function settlement(month: string): Settlement {
     if (acc.kind !== 'credit_card') continue;
     const hasActivity = db.transactions.rows.some((t) => t.account_id === acc.id && t.status !== 'superseded' && t.posted_at.startsWith(month));
     if (!hasActivity) continue;
-    const covered = db.statements.rows.some((s) => s.account_id === acc.id && s.status !== 'failed' && s.status !== 'superseded' && s.status !== 'bill_only' && s.period_end >= end);
+    const covered = db.statements.rows.some((s) => s.account_id === acc.id && (s.status === 'imported' || s.status === 'needs_review') && s.period_end >= end);
     if (!covered) awaiting.push(acc.display_name);
   }
   return { settled: awaiting.length === 0, awaiting };

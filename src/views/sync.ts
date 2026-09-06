@@ -1,7 +1,7 @@
 import type { View } from '../app/router';
 import { html, raw, onAction, toast, modal, pct } from '../app/ui';
 import { db } from '../store/db';
-import { abortSync, defaultPeriod, dropPdf, onSync, queueLocalPdf, retryPdf, runSync, syncState } from '../core/sync';
+import { abortSync, defaultPeriod, dropPdf, loadPendingFromSheet, onSync, queueLocalPdf, retryPdf, runSync, syncState } from '../core/sync';
 import { escapeHtml } from '../core/text';
 import { daysAgoIso, todayIso } from '../core/dates';
 import { categorizeAll } from '../core/categorize';
@@ -14,6 +14,7 @@ let period = defaultPeriod(3);
 export const syncView: View = {
   title: 'Sync',
   render(root) {
+    loadPendingFromSheet();
     const draw = () => {
       root.innerHTML = page();
     };
@@ -135,7 +136,7 @@ function resumeLabel(): string {
 
 function queue(): string {
   const q = syncState.pendingPdfs;
-  const recent = db.statements.rows.filter((s) => s.status !== 'bill_only').slice(-8).reverse();
+  const recent = db.statements.rows.filter((s) => !['bill_only', 'queued', 'needs_password', 'needs_account', 'superseded'].includes(s.status)).slice(-8).reverse();
   return `
     ${q.length
       ? q

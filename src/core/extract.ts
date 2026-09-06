@@ -388,7 +388,7 @@ export async function processEmails(emails: FetchedEmail[], opts: { onProgress?:
                 continue;
               }
               const guess = db.activeAccounts().find((a) => a.statement_sender && a.statement_sender === emailAddress(e.from));
-              summary.pdfs.push({ sha, filename: att.filename, data, emailId: e.id, from: e.from, subject: e.subject, receivedAt: e.receivedAt, hint: passwordHint(e.bodyText), accountGuess: guess?.id ?? '' });
+              summary.pdfs.push({ sha, filename: att.filename, data, attachmentId: att.attachmentId, emailId: e.id, from: e.from, subject: e.subject, receivedAt: e.receivedAt, hint: passwordHint(e.bodyText), accountGuess: guess?.id ?? '' });
               outcome = outcome === 'ignored' ? 'pdf_queued' : `${outcome}+pdf`;
             } catch (err) {
               outcome = `attachment_error: ${String(err).slice(0, 60)}`;
