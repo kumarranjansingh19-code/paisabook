@@ -259,3 +259,13 @@ a.list-item:hover { background: var(--md-surface-container-low); margin: 0 -1.12
 .install-bar span { flex: 1; }
 .install-bar .btn.primary { background: var(--md-primary); color: var(--md-on-primary); }
 .update-bar { background: var(--md-tertiary-container); color: var(--md-on-surface); }
+
+/* long unbroken strings (statement filenames, references, errors) must wrap on phones */
+main#view { overflow-x: hidden; }
+.list-item .title, .list-item .sub, .txn .meta, .log, .copy, .card p, .card li, .stat .sub, .install-bar span { overflow-wrap: anywhere; word-break: break-word; }
+.list-item .title { white-space: normal; }
+.sub .pill, .list-item .pill.warn, .list-item .pill.bad { white-space: normal; height: auto; line-height: 1.35; padding: .15rem .55rem; }
+.list-item > .btn { flex-shrink: 0; }
+.list-item { flex-wrap: wrap; }
+.list-item .grow { flex: 1 1 200px; }
+.log { max-width: 100%; }
