@@ -1,7 +1,7 @@
 import type { View } from '../app/router';
 import { html, raw, money, onAction, modal, toast, spinner, confirmDialog } from '../app/ui';
 import { db, type Account } from '../store/db';
-import { addAccount, deleteAccount, rehomeUnmatched, unmatchedHints, updateAccount } from '../core/accounts';
+import { addAccount, deleteAccount, ignoreHint, ignoredHints, rehomeUnmatched, restoreHint, unmatchedHints, updateAccount } from '../core/accounts';
 import { settings, saveSettings } from '../store/local';
 import { escapeHtml } from '../core/text';
 import { scanMailbox } from '../core/extract';
@@ -77,6 +77,16 @@ export const accountsView: View = {
         const r = await deleteAccount(a.id);
         toast(r === 'deleted' ? 'Deleted' : 'This account has data — hide it instead', r === 'deleted' ? 'ok' : 'error');
       },
+      'ignore-hint': async (el) => {
+        const hint = el.dataset.hint!;
+        if (!(await confirmDialog(`Ignore "${hint}"? Its alerts are hidden and future ones are skipped. You can restore it later.`, 'Ignore'))) return;
+        const n = await ignoreHint(hint);
+        toast(`${n} alerts hidden`, 'ok');
+      },
+      'restore-hint': async (el) => {
+        const n = await restoreHint(el.dataset.key!);
+        toast(`${n} alerts restored`, 'ok');
+      },
       deactivate: async (el) => {
         const a = db.accounts.get(el.dataset.id!)!;
         if (!(await confirmDialog(`Hide ${a.display_name}? Its transactions stay in the sheet but won't be matched or shown.`, 'Hide'))) return;
@@ -94,6 +104,7 @@ export const accountsView: View = {
 function page(): string {
   const accs = db.accounts.rows;
   const hints = unmatchedHints();
+  const ignored = ignoredHints();
   const pw = settings().passwords;
   const stmtCount = (id: string) => db.statements.rows.filter((s) => s.account_id === id && s.status !== 'failed' && s.status !== 'superseded').length;
   const txnCount = (id: string) => db.transactions.rows.filter((t) => t.account_id === id && t.status !== 'superseded').length;
@@ -103,7 +114,11 @@ function page(): string {
     <div class="row between"><h2>Accounts</h2><button class="btn primary" data-action="add">+ Add</button></div>
     ${hints.length
       ? raw(`<div class="card warn"><h3>Alerts for unknown accounts</h3><p class="small muted">These masked numbers appear in alerts but match none of your accounts. Add the account and the alerts attach automatically.</p>
-        ${hints.map((h) => `<div class="list-item"><div class="grow"><div class="title">${escapeHtml(h.hint)}</div><div class="sub">${h.count} alerts · last ${h.last}</div></div><button class="btn small" data-action="add-from-hint" data-hint="${escapeHtml(h.hint)}">Add account</button></div>`).join('')}</div>`)
+        ${hints.map((h) => `<div class="list-item"><div class="grow"><div class="title">${escapeHtml(h.hint)}</div><div class="sub">${h.count} alerts · last ${h.last}</div></div><button class="btn small" data-action="add-from-hint" data-hint="${escapeHtml(h.hint)}">Add account</button><button class="btn small ghost" data-action="ignore-hint" data-hint="${escapeHtml(h.hint)}" title="Not my account — hide these alerts and skip this hint from now on">Ignore</button></div>`).join('')}</div>`)
+      : ''}
+    ${ignored.length
+      ? raw(`<details class="card small"><summary>Ignored hints (${ignored.length})</summary><p class="muted">Alerts mentioning these are skipped. Restore one to see its alerts again.</p>
+        ${ignored.map((k) => `<div class="list-item"><div class="grow">${escapeHtml(k)}</div><button class="btn small ghost" data-action="restore-hint" data-key="${escapeHtml(k)}">Restore</button></div>`).join('')}</details>`)
       : ''}
     <div class="card">${accs.length ? raw(accs
       .map(

@@ -155,6 +155,53 @@ export function institutionFromHint(hint: string): string {
   return inst.length >= 3 ? inst : '';
 }
 
+const IGNORED_KEY = 'ignored_hints';
+export const hintKey = (hint: string) => hint.toUpperCase().replace(/\s+/g, ' ').trim();
+
+export function ignoredHints(): string[] {
+  try {
+    return JSON.parse(db.getSetting(IGNORED_KEY) || '[]') as string[];
+  } catch {
+    return [];
+  }
+}
+export function isIgnoredHint(hint: string): boolean {
+  const k = hintKey(hint);
+  return ignoredHints().some((h) => h === k);
+}
+
+/**
+ * "Not my account": hide every unmatched alert carrying this hint and skip
+ * the hint in future syncs (wallets, someone else's card, FASTag…).
+ */
+export async function ignoreHint(hint: string): Promise<number> {
+  const k = hintKey(hint);
+  const list = ignoredHints();
+  if (!list.includes(k)) await db.setSetting(IGNORED_KEY, JSON.stringify([...list, k]));
+  let n = 0;
+  for (const t of db.transactions.rows) {
+    if (t.status === 'unmatched' && hintKey(t.account_hint) === k) {
+      db.update(db.transactions, t.id, { status: 'superseded' });
+      n++;
+    }
+  }
+  await db.flush();
+  return n;
+}
+
+export async function restoreHint(k: string): Promise<number> {
+  await db.setSetting(IGNORED_KEY, JSON.stringify(ignoredHints().filter((h) => h !== k)));
+  let n = 0;
+  for (const t of db.transactions.rows) {
+    if (t.status === 'superseded' && t.source === 'email_alert' && !t.account_id && hintKey(t.account_hint) === k) {
+      db.update(db.transactions, t.id, { status: 'unmatched' });
+      n++;
+    }
+  }
+  await db.flush();
+  return n;
+}
+
 /** Distinct account hints from unmatched alerts, grouped, for the accounts page. */
 export function unmatchedHints(): Array<{ hint: string; count: number; last: string }> {
   const m = new Map<string, { hint: string; count: number; last: string }>();

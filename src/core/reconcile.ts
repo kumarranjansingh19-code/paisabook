@@ -1,7 +1,7 @@
 import { db, stamp, type Transaction, type TxnSource } from '../store/db';
 import { txnFingerprint, normalizeNarration } from './fingerprint';
 import { daysBetween } from './dates';
-import { instKey } from './accounts';
+import { instKey, isIgnoredHint } from './accounts';
 
 export interface IncomingTxn {
   postedAt: string;
@@ -176,8 +176,9 @@ export function recordAlert(
   alert: { accountId: string | null; accountHint: string; postedAt: string; amountPaise: number; direction: 'debit' | 'credit'; narration: string; refNo: string | null },
   emailId: string,
   pendingBatch: Transaction[],
-): 'inserted' | 'duplicate' | 'unmatched' {
+): 'inserted' | 'duplicate' | 'unmatched' | 'ignored' {
   const accountId = alert.accountId ?? '';
+  if (!accountId && isIgnoredHint(alert.accountHint)) return 'ignored';
   const fingerprint = txnFingerprint({
     accountId: accountId || `hint:${alert.accountHint.toUpperCase().replace(/\s+/g, '')}`,
     postedAt: alert.postedAt,

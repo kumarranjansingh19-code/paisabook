@@ -363,8 +363,8 @@ export async function processEmails(emails: FetchedEmail[], opts: { onProgress?:
             );
             if (res === 'inserted') summary.alerts++;
             else if (res === 'duplicate') summary.duplicates++;
-            else summary.unmatched++;
-            outcome = res;
+            else if (res === 'unmatched') summary.unmatched++;
+            outcome = res === 'ignored' ? 'ignored_hint' : res;
           } catch (err) {
             outcome = `parse_error: ${String(err).slice(0, 60)}`;
           }
