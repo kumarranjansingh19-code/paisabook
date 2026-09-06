@@ -9,6 +9,7 @@ import { emailAddress, redactPii } from './text';
 import { sha256HexAsync } from './hash';
 import { settings, saveSettings } from '../store/local';
 import { downloadAttachment } from '../google/gmail';
+import { getCachedExtract, putCachedExtract } from '../store/mailcache';
 
 export interface PendingPdf {
   /** stable id = sha256 of the bytes */
@@ -105,6 +106,10 @@ export async function importStatement(
   }
 
   let extract: StatementExtract;
+  const cacheKey = `stmt:${pdf.sha}`;
+  const cachedExtract = await getCachedExtract<StatementExtract>(cacheKey);
+  if (cachedExtract) extract = cachedExtract;
+  else
   try {
     extract = await generateJson<StatementExtract>(
       statementSchema,
@@ -119,6 +124,7 @@ export async function importStatement(
   } catch (err) {
     return { status: 'failed', reason: `AI extraction failed: ${String(err)}` };
   }
+  if (!cachedExtract) void putCachedExtract(cacheKey, extract);
   if (extract.statement_kind === 'not_a_statement' || (extract.transactions.length < 2 && !extract.total_due)) {
     return { status: 'ignored', reason: 'not a bank/card statement' };
   }

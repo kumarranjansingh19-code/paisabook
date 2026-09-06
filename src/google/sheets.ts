@@ -105,6 +105,21 @@ export async function styleHeader(id: string, sheetId: number): Promise<void> {
   });
 }
 
+/**
+ * Spreadsheets this app created (the drive.file scope only ever sees those),
+ * newest first — how a new device finds the ledger without the URL.
+ */
+export async function listOwnSpreadsheets(): Promise<Array<{ id: string; name: string; modifiedTime: string }>> {
+  const params = new URLSearchParams({
+    q: "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false",
+    fields: 'files(id,name,modifiedTime)',
+    orderBy: 'modifiedTime desc',
+    pageSize: '20',
+  });
+  const r = await gfetch<{ files?: Array<{ id: string; name: string; modifiedTime: string }> }>(`https://www.googleapis.com/drive/v3/files?${params}`);
+  return r.files ?? [];
+}
+
 /** Accepts a full URL or a bare id. */
 export function parseSpreadsheetId(input: string): string {
   const m = /\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/.exec(input);

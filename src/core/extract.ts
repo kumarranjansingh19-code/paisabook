@@ -12,7 +12,7 @@ import { recordAlert } from './reconcile';
 import { recordBillNotice, shaOf, type PendingPdf } from './statements';
 import { detectStatement, parseAlert, parseBill, type HeuristicAlert } from './heuristics';
 import { isJunkNarration } from './reconcile';
-import { getCachedEmails, getCachedMetas, putCachedEmails, putCachedMetas } from '../store/mailcache';
+import { getCachedEmails, getCachedExtracts, getCachedMetas, putCachedEmails, putCachedExtract, putCachedMetas } from '../store/mailcache';
 
 /** Cheap pre-filter so the LLM only sees plausible financial mail. */
 const FIN_WORDS =
@@ -439,18 +439,34 @@ export async function processEmails(emails: FetchedEmail[], opts: { onProgress?:
       chunk(items, per),
       2,
       async (batch, _i, poolSignal) => {
-        let results: EmailBatchResult['results'] = [];
-        try {
-          const r = await generateJson<EmailBatchResult>(emailBatchSchema, PROMPT + listing(batch, chars), { tier, signal: poolSignal });
-          results = r.results;
-        } catch (err) {
-          if (poolSignal.aborted) throw err;
-          summary.llmErrors += batch.length;
-          done += batch.length; // left unlogged so the next run retries them
-          p({ phase, done, total: items.length });
-          return;
+        // Model output is cached per email on the device: a rebuild or a re-read pays nothing for mail already read.
+        const cacheKeys = batch.map((e) => `alert:${tier}:${e.id}`);
+        const cached = await getCachedExtracts<EmailResult>(cacheKeys);
+        const byIndex = new Map<number, EmailResult>();
+        batch.forEach((e, i) => {
+          const c = cached.get(`alert:${tier}:${e.id}`);
+          if (c) byIndex.set(i, { ...c, index: i });
+        });
+        const fresh = batch.map((e, i) => ({ e, i })).filter(({ i }) => !byIndex.has(i));
+        if (fresh.length) {
+          let results: EmailBatchResult['results'] = [];
+          try {
+            const r = await generateJson<EmailBatchResult>(emailBatchSchema, PROMPT + listing(fresh.map((f) => f.e), chars), { tier, signal: poolSignal });
+            results = r.results;
+          } catch (err) {
+            if (poolSignal.aborted) throw err;
+            summary.llmErrors += fresh.length;
+            done += batch.length; // left unlogged so the next run retries them
+            p({ phase, done, total: items.length });
+            return;
+          }
+          for (const r of results) {
+            const f = fresh[r.index];
+            if (!f) continue;
+            byIndex.set(f.i, { ...r, index: f.i });
+            void putCachedExtract(`alert:${tier}:${f.e.id}`, r);
+          }
         }
-        const byIndex = new Map(results.map((r) => [r.index, r]));
         for (let i = 0; i < batch.length; i++) {
           const e = batch[i]!;
           const r = reconcileWithParser(e, byIndex.get(i));
