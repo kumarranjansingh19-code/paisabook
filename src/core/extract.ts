@@ -11,6 +11,7 @@ import { parseAmountToPaise } from './money';
 import { recordAlert } from './reconcile';
 import { recordBillNotice, shaOf, type PendingPdf } from './statements';
 import { detectStatement, parseAlert, parseBill } from './heuristics';
+import { getCachedEmails, getCachedMetas, putCachedEmails, putCachedMetas } from '../store/mailcache';
 
 /** Cheap pre-filter so the LLM only sees plausible financial mail. */
 const FIN_WORDS =
@@ -138,9 +139,11 @@ export async function scanMailbox(
   }
   const fresh = opts.reprocess ? ids : ids.filter((id) => !db.emails.has(id));
   const have = new Map(ck.metas.map((m) => [m.id, m]));
+  // Headers downloaded in any earlier scan (discovery, an interrupted run) are served from the device cache.
+  for (const [id, m] of await getCachedMetas(fresh.filter((id) => !have.has(id)))) have.set(id, m);
   const remaining = fresh.filter((id) => !have.has(id));
   const already = fresh.length - remaining.length;
-  p({ phase: 'Reading headers', done: already, total: fresh.length, note: `${ids.length} emails in range${already ? `, resuming after ${already}` : ''}` });
+  p({ phase: 'Reading headers', done: already, total: fresh.length, note: `${ids.length} emails in range${already ? `, ${already} already on this device` : ''}` });
 
   let interrupted: string | undefined;
   let lastSave = Date.now();
@@ -149,6 +152,7 @@ export async function scanMailbox(
       signal: opts.signal,
       onBatch: (ms) => {
         for (const m of ms) have.set(m.id, m);
+        void putCachedMetas(ms);
         if (Date.now() - lastSave > 2500) {
           ck!.metas = [...have.values()];
           saveCheckpoint(ck!);
@@ -181,13 +185,18 @@ export async function scanMailbox(
 
   // Full bodies for candidates. On a rate limit, keep what landed: the caller
   // processes it and the email log makes the next run skip it.
-  const wanted = candidates.filter((m) => opts.reprocess || !db.emails.has(m.id)).map((m) => m.id);
-  p({ phase: 'Downloading candidates', done: 0, total: wanted.length });
-  const emails: FetchedEmail[] = [];
+  const candidateIds = candidates.filter((m) => opts.reprocess || !db.emails.has(m.id)).map((m) => m.id);
+  const cachedFull = await getCachedEmails(candidateIds);
+  const emails: FetchedEmail[] = [...cachedFull.values()];
+  const wanted = candidateIds.filter((id) => !cachedFull.has(id));
+  p({ phase: 'Downloading candidates', done: 0, total: wanted.length, note: cachedFull.size ? `${cachedFull.size} already on this device` : undefined });
   try {
     await fetchFull(wanted, {
       signal: opts.signal,
-      onBatch: (es) => emails.push(...es),
+      onBatch: (es) => {
+        emails.push(...es);
+        void putCachedEmails(es);
+      },
       onProgress: (n) => p({ phase: 'Downloading candidates', done: n, total: wanted.length }),
     });
   } catch (err) {

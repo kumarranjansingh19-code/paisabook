@@ -1,6 +1,7 @@
 import { db, stamp, type Transaction, type TxnSource } from '../store/db';
 import { txnFingerprint, normalizeNarration } from './fingerprint';
 import { daysBetween } from './dates';
+import { instKey } from './accounts';
 
 export interface IncomingTxn {
   postedAt: string;
@@ -133,6 +134,43 @@ export async function reconcile(
   return result;
 }
 
+/**
+ * One-off cleanup for ledgers built before alert dedup existed: among alert
+ * rows on the same account with the same amount/direction within a day, keep
+ * the one with a reference (or the earliest) and supersede the rest.
+ */
+export async function dedupeAlerts(): Promise<number> {
+  const rows = db.liveTransactions().filter((t) => t.source === 'email_alert').sort((a, b) => (a.posted_at < b.posted_at ? -1 : 1));
+  const gone = new Set<string>();
+  let n = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const a = rows[i]!;
+    if (gone.has(a.id)) continue;
+    for (let j = i + 1; j < rows.length; j++) {
+      const b = rows[j]!;
+      if (gone.has(b.id) || b.amount_paise !== a.amount_paise || b.direction !== a.direction) continue;
+      if (daysBetween(a.posted_at, b.posted_at) > 1) break;
+      const sameAcc = a.account_id ? a.account_id === b.account_id : !b.account_id && instKey(a.account_hint) === instKey(b.account_hint);
+      if (!sameAcc) continue;
+      const ra = a.ref_no.replace(/\s+/g, '').toUpperCase();
+      const rb = b.ref_no.replace(/\s+/g, '').toUpperCase();
+      if (ra && rb && ra !== rb) continue;
+      // keep the row with a reference; fold the other's better narration into it
+      const [keep, drop] = ra || !rb ? [a, b] : [b, a];
+      const patch: Partial<Transaction> = {};
+      if (!keep.ref_no && drop.ref_no) patch.ref_no = drop.ref_no;
+      if (drop.narration.length > keep.narration.length) patch.narration = drop.narration;
+      if (!keep.category && drop.category) Object.assign(patch, { category: drop.category, merchant: drop.merchant, categorized_by: drop.categorized_by });
+      if (Object.keys(patch).length) db.update(db.transactions, keep.id, patch);
+      db.update(db.transactions, drop.id, { status: 'superseded' });
+      gone.add(drop.id);
+      n++;
+    }
+  }
+  await db.flush();
+  return n;
+}
+
 /** Record a provisional transaction from an alert email. Returns the outcome. */
 export function recordAlert(
   alert: { accountId: string | null; accountHint: string; postedAt: string; amountPaise: number; direction: 'debit' | 'credit'; narration: string; refNo: string | null },
@@ -150,12 +188,25 @@ export function recordAlert(
   });
   const id = `t_${fingerprint.slice(0, 20)}`;
   if (db.transactions.has(id) || pendingBatch.some((p) => p.id === id)) return 'duplicate';
-  // An alert for an amount already confirmed by a statement on the same day is the same txn.
-  if (accountId) {
-    const dup = db.liveTransactions().find(
-      (r) => r.account_id === accountId && r.amount_paise === alert.amountPaise && r.direction === alert.direction && Math.abs(daysBetween(r.posted_at, alert.postedAt)) <= 1 && (r.ref_no && alert.refNo ? r.ref_no.toUpperCase() === alert.refNo.toUpperCase() : r.source === 'statement'),
-    );
-    if (dup) return 'duplicate';
+
+  // Banks often send two mails for one transaction (a UPI alert with the
+  // reference, then a generic "your account was debited" without it). Same
+  // account, amount, direction within a day is the same transaction unless
+  // both carry different reference numbers.
+  const inst = instKey(alert.accountHint);
+  const sameAccount = (r: Transaction) => (accountId ? r.account_id === accountId : !r.account_id && instKey(r.account_hint) === inst);
+  const twins = [...db.liveTransactions(), ...pendingBatch].filter(
+    (r) => sameAccount(r) && r.amount_paise === alert.amountPaise && r.direction === alert.direction && Math.abs(daysBetween(r.posted_at, alert.postedAt)) <= 1,
+  );
+  const newRef = alert.refNo?.replace(/\s+/g, '').toUpperCase() ?? '';
+  for (const t of twins) {
+    const oldRef = t.ref_no.replace(/\s+/g, '').toUpperCase();
+    if (oldRef && newRef && oldRef !== newRef) continue; // two distinct references: genuinely two transactions
+    if (!oldRef && newRef && db.transactions.has(t.id)) {
+      // the earlier generic alert learns the reference (and a better narration) from this one
+      db.update(db.transactions, t.id, { ref_no: alert.refNo ?? '', narration: alert.narration.length > t.narration.length ? alert.narration : t.narration });
+    }
+    return 'duplicate';
   }
   pendingBatch.push({
     id,

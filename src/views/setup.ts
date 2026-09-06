@@ -201,9 +201,10 @@ function wire(root: HTMLElement, step: Step): void {
       window.addEventListener('paisabook:ratelimit', onLimit);
       try {
         if (!db.loaded) await db.load();
+        // Bodies cost the same quota as headers and are cached on the device, so the
+        // first sync reuses everything this scan downloads.
         const scan = await scanMailbox(daysAgoIso(60), todayIso(), {
           reprocess: true,
-          metaOnly: true,
           maxEmails: 1500,
           onProgress: (p) => {
             status.innerHTML = spinner(`${p.phase} ${p.total ? `${p.done}/${p.total}` : ''}${note}`);

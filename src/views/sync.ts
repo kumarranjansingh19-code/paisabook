@@ -7,6 +7,7 @@ import { daysAgoIso, todayIso } from '../core/dates';
 import { categorizeAll } from '../core/categorize';
 import { usage } from '../llm/gemini';
 import { scanCheckpoint } from '../core/extract';
+import { dedupeAlerts } from '../core/reconcile';
 
 let period = defaultPeriod(3);
 
@@ -41,6 +42,12 @@ export const syncView: View = {
         void runSync({ from: period.from, to: period.to, reprocess, broad, forceStatements: force });
       },
       stop: () => abortSync(),
+      dedupe: async (el) => {
+        el.setAttribute('disabled', '');
+        const n = await dedupeAlerts();
+        toast(n ? `${n} duplicate alerts merged` : 'No duplicates found', 'ok');
+        el.removeAttribute('disabled');
+      },
       categorize: async (el) => {
         el.setAttribute('disabled', '');
         const r = await categorizeAll();
@@ -89,6 +96,10 @@ function page(): string {
       <p class="muted small">Statements found in mail land here. Ones that need a password wait for you. You can also pick PDFs from your device.</p>
       <label class="field">Import a PDF from this device <input type="file" name="pdf" accept="application/pdf,.pdf" multiple /></label>
       <div id="queue">${raw(queue())}</div>
+    </div>
+    <div class="card">
+      <div class="row between"><h3>Merge duplicate alerts</h3><button class="btn" data-action="dedupe">Run now</button></div>
+      <p class="muted small">Banks often mail twice about one transaction (with and without the reference number). New syncs merge these automatically; run this once for rows imported earlier.</p>
     </div>
     <div class="card">
       <div class="row between"><h3>Categorize</h3><button class="btn" data-action="categorize">Run now</button></div>
