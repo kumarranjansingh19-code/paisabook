@@ -1,5 +1,6 @@
 import { escapeHtml } from '../core/text';
 import { formatPaise } from '../core/money';
+import { categoryLabel } from '../core/categories';
 
 /** Tagged template that escapes interpolations unless they are marked raw(). */
 export class Raw {
@@ -113,7 +114,7 @@ export function pct(a: number, b: number): number {
 }
 
 export function catLabel(c: string): string {
-  return (c || 'uncategorized').replace(/_/g, ' ');
+  return categoryLabel(c);
 }
 
 export function categoryOptions(selected: string, categories: readonly string[]): string {

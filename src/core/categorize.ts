@@ -1,6 +1,7 @@
 import { db, newId, stamp, type Rule, type Transaction } from '../store/db';
 import { generateJson } from '../llm/gemini';
-import { categorizationSchema, ruleSuggestSchema, SPEND_CATEGORIES, type CategorizationResult, type RuleSuggestResult } from '../llm/schemas';
+import { categorizationSchema, ruleSuggestSchema, type CategorizationResult, type RuleSuggestResult } from '../llm/schemas';
+import { categoryNames, categoryPromptBlock, withCategoryEnum } from './categories';
 import { ruleNorm } from './fingerprint';
 import { formatPaise } from './money';
 import { chunk } from './pool';
@@ -103,10 +104,11 @@ export async function categorizeAll(onProgress?: CategorizeProgress, signal?: Ab
         return `id=${t.id} | ${t.posted_at} | ${t.direction} ${formatPaise(t.amount_paise)} | account: ${acc?.display_name ?? '?'} (${acc?.kind ?? '?'}) | ${t.narration}`;
       })
       .join('\n');
+    const allowed = new Set(categoryNames());
     const result = await generateJson<CategorizationResult>(
-      categorizationSchema,
+      withCategoryEnum(categorizationSchema),
       buildMemory() +
-        `Categorize these Indian personal-finance transactions. Allowed categories: ${SPEND_CATEGORIES.join(', ')}.\n` +
+        `Categorize these Indian personal-finance transactions. Allowed categories (use the exact key):\n${categoryPromptBlock()}\n\n` +
         `Use cc_payment for payments toward the user's own credit-card bill (and the matching credit on the card); self_transfer for moves between the user's own accounts ` +
         `${householdHints()}; paid_for_others for amounts paid on someone else's behalf, received_for_others for their repayment credits; ` +
         `salary_income for salary credits; dividend_income for dividend/SGB-interest credits; refund for merchant refunds/reversals; ` +
@@ -115,7 +117,7 @@ export async function categorizeAll(onProgress?: CategorizeProgress, signal?: Ab
     );
     const valid = new Set(batch.map((t) => t.id));
     for (const r of result.results) {
-      if (!valid.has(r.id) || !SPEND_CATEGORIES.includes(r.category)) continue;
+      if (!valid.has(r.id) || !allowed.has(r.category)) continue;
       db.update(db.transactions, r.id, { category: r.category, merchant: r.merchant || '', categorized_by: 'llm' });
       byLlm++;
     }
@@ -221,7 +223,7 @@ export async function suggestRules(): Promise<RuleSuggestion[]> {
     .map(([k, g]) => `${k} (${g.n}×) | narration samples: ${[...g.samples].join(' ; ')}`);
   if (!lines.length) return [];
   const r = await generateJson<RuleSuggestResult>(
-    ruleSuggestSchema,
+    withCategoryEnum(ruleSuggestSchema),
     `From this merchant history, suggest categorization RULES — only where the mapping is unambiguous and the fragment is distinctive ` +
       `(a substring that could never appear in unrelated narrations). Skip merchants whose category legitimately varies by context.\n\n${lines.join('\n')}`,
     { tier: 'reasoning' },

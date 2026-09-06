@@ -2,7 +2,7 @@ import type { View } from '../app/router';
 import { html, raw, onAction, toast, modal, spinner, categoryOptions, catLabel } from '../app/ui';
 import { db } from '../store/db';
 import { addRule, deleteRule, suggestRules, checkRulePrecision, type RuleSuggestion } from '../core/categorize';
-import { SPEND_CATEGORIES } from '../llm/schemas';
+import { categoryNames } from '../core/categories';
 import { escapeHtml } from '../core/text';
 
 export const rulesView: View = {
@@ -16,7 +16,7 @@ export const rulesView: View = {
       add: async () => {
         const r = await modal(
           `<label class="field">Narration contains (lowercase, no spaces) <input name="pattern" placeholder="swiggyinstamart" required /></label>
-           <label class="field">Category <select name="category">${categoryOptions('', SPEND_CATEGORIES)}</select></label>
+           <label class="field">Category <select name="category">${categoryOptions('', categoryNames())}</select></label>
            <label class="field">Merchant label (optional) <input name="merchant" placeholder="Swiggy Instamart" /></label>`,
           { title: 'New rule', submit: 'Add & apply' },
         );

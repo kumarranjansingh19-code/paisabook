@@ -109,6 +109,51 @@ export interface FamilyMember {
   created_at: string;
 }
 
+/**
+ * Categories live in the sheet too. `kind` tells the dashboard how to treat
+ * a category: spend (consumption), income, transfer (never spend or income),
+ * investment (money kept, not spent), refund (a credit that reduces spend).
+ */
+export type CategoryKind = 'spend' | 'income' | 'transfer' | 'investment' | 'refund';
+export interface Category {
+  name: string; // the key used on transactions, e.g. "home_services"
+  label: string; // shown in the UI
+  kind: CategoryKind;
+  description: string; // hint for the AI
+  sort: number;
+}
+
+export const SEED_CATEGORIES: Category[] = [
+  { name: 'groceries', label: 'Groceries', kind: 'spend', description: 'supermarkets, quick-commerce grocery, vegetables', sort: 10 },
+  { name: 'dining', label: 'Dining', kind: 'spend', description: 'restaurants, food delivery, cafes', sort: 20 },
+  { name: 'utilities', label: 'Utilities', kind: 'spend', description: 'electricity, water, gas, mobile, broadband, DTH', sort: 30 },
+  { name: 'rent_housing', label: 'Rent / housing', kind: 'spend', description: 'rent, home loan interest, housing costs', sort: 40 },
+  { name: 'society_maintenance', label: 'Society maintenance', kind: 'spend', description: 'apartment society dues', sort: 50 },
+  { name: 'transport_fuel', label: 'Transport / fuel', kind: 'spend', description: 'fuel, cabs, metro, tolls, FASTag, parking', sort: 60 },
+  { name: 'shopping', label: 'Shopping', kind: 'spend', description: 'online and offline retail, clothes, electronics', sort: 70 },
+  { name: 'health_medical', label: 'Health / medical', kind: 'spend', description: 'doctors, pharmacy, diagnostics', sort: 80 },
+  { name: 'home_services', label: 'Home services', kind: 'spend', description: 'maid, cook, cleaning, repairs, car wash', sort: 90 },
+  { name: 'donation', label: 'Donation', kind: 'spend', description: 'charity, religious donations', sort: 100 },
+  { name: 'insurance_premium', label: 'Insurance premium', kind: 'spend', description: 'health, term, vehicle insurance premiums', sort: 110 },
+  { name: 'entertainment', label: 'Entertainment', kind: 'spend', description: 'streaming, movies, events, games', sort: 120 },
+  { name: 'travel', label: 'Travel', kind: 'spend', description: 'flights, trains, hotels, holidays', sort: 130 },
+  { name: 'education', label: 'Education', kind: 'spend', description: 'school, college fees, tuition', sort: 140 },
+  { name: 'learning_development', label: 'Learning', kind: 'spend', description: 'courses, books, subscriptions for learning', sort: 150 },
+  { name: 'emi_loan', label: 'EMI / loan', kind: 'spend', description: 'loan EMIs and repayments (not card bills)', sort: 160 },
+  { name: 'fees_charges', label: 'Fees / charges', kind: 'spend', description: 'bank charges, GST on fees, markups, penalties', sort: 170 },
+  { name: 'cash', label: 'Cash', kind: 'spend', description: 'ATM withdrawals and cash spending', sort: 180 },
+  { name: 'other', label: 'Other', kind: 'spend', description: 'anything that fits nothing else', sort: 190 },
+  { name: 'investment', label: 'Investment', kind: 'investment', description: 'transfers to broker/MF/PPF/NPS and capital coming back from them', sort: 200 },
+  { name: 'cc_payment', label: 'Card bill payment', kind: 'transfer', description: "paying the user's own credit-card bill, and that credit on the card", sort: 300 },
+  { name: 'self_transfer', label: 'Self transfer', kind: 'transfer', description: "moves between the user's own accounts", sort: 310 },
+  { name: 'family_transfer', label: 'Family transfer', kind: 'transfer', description: 'money sent to family members', sort: 320 },
+  { name: 'paid_for_others', label: 'Paid for others', kind: 'transfer', description: "amounts paid on someone else's behalf", sort: 330 },
+  { name: 'received_for_others', label: 'Received for others', kind: 'transfer', description: 'their repayment of amounts paid for them', sort: 340 },
+  { name: 'salary_income', label: 'Salary', kind: 'income', description: 'salary credits', sort: 400 },
+  { name: 'dividend_income', label: 'Dividend / interest', kind: 'income', description: 'dividends, interest, SGB interest', sort: 410 },
+  { name: 'refund', label: 'Refund', kind: 'refund', description: 'merchant refunds and reversals', sort: 500 },
+];
+
 type Row = Record<string, Cell>;
 
 interface TableDef<T extends object> {
@@ -143,6 +188,7 @@ export const TABLES = {
     numeric: ['rows_imported'],
   } satisfies TableDef<Source>,
   family: { name: 'family', columns: ['id', 'name', 'relation', 'created_at'] } satisfies TableDef<FamilyMember>,
+  categories: { name: 'categories', columns: ['name', 'label', 'kind', 'description', 'sort'], numeric: ['sort'] } satisfies TableDef<Category>,
 };
 export type TableName = keyof typeof TABLES;
 export const TAB_NAMES = Object.values(TABLES).map((t) => t.name);
@@ -221,12 +267,13 @@ export class SheetDb {
   settingsTable = new Table<Setting>(TABLES.settings, 'key');
   sources = new Table<Source>(TABLES.sources, 'id');
   family = new Table<FamilyMember>(TABLES.family, 'id');
+  categories = new Table<Category>(TABLES.categories, 'name');
   private pending: Array<{ range: string; values: Cell[][] }> = [];
   private listeners = new Set<() => void>();
   private headerCache: Record<string, string[]> = {};
 
   private tables(): Array<Table<Row>> {
-    return [this.accounts, this.transactions, this.statements, this.rules, this.emails, this.settingsTable, this.sources, this.family] as unknown as Array<Table<Row>>;
+    return [this.accounts, this.transactions, this.statements, this.rules, this.emails, this.settingsTable, this.sources, this.family, this.categories] as unknown as Array<Table<Row>>;
   }
 
   onChange(fn: () => void): () => void {
@@ -281,7 +328,22 @@ export class SheetDb {
     if (!id) throw new Error('No spreadsheet connected');
     this.spreadsheetId = id;
     const ranges = TAB_NAMES.map((t) => `${t}!A:${columnLetter(40)}`);
-    const data = await batchRead(id, ranges);
+    let data: Record<string, Cell[][]>;
+    try {
+      data = await batchRead(id, ranges);
+    } catch (err) {
+      // A sheet made by an older build lacks a newer tab: add the missing tabs/headers once, then read again.
+      if (!this.upgrading && /Unable to parse range|not found/i.test(String((err as Error).message))) {
+        this.upgrading = true;
+        try {
+          await this.connect(id);
+        } finally {
+          this.upgrading = false;
+        }
+        return;
+      }
+      throw err;
+    }
     // Column order in the sheet may differ from ours (older layouts, user edits): load by header name.
     this.headerCache = {};
     for (const t of this.tables()) {
@@ -290,8 +352,11 @@ export class SheetDb {
       this.headerCache[t.def.name] = (values[0] ?? []).map(String);
     }
     this.loaded = true;
+    // First time: copy the built-in categories into the sheet so they can be edited and extended there.
+    if (!this.categories.rows.length) await this.append(this.categories, SEED_CATEGORIES.map((c) => ({ ...c })));
     this.notify();
   }
+  private upgrading = false;
 
   private colOf(table: string, col: string): number {
     const idx = this.headerCache[table]?.indexOf(col) ?? -1;

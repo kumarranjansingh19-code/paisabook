@@ -1,6 +1,7 @@
 import type { View } from '../app/router';
 import { html, raw, onAction, toast, modal, confirmDialog, downloadText, spinner } from '../app/ui';
-import { db, newId, stamp } from '../store/db';
+import { db, newId, stamp, type Category } from '../store/db';
+import { addCategory, categories } from '../core/categories';
 import { settings, saveSettings, resetDevice } from '../store/local';
 import { signOut, redirectUri, hasValidToken, startSignIn } from '../google/auth';
 import { escapeHtml } from '../core/text';
@@ -112,6 +113,22 @@ export const settingsView: View = {
         location.reload();
       },
       'change-sheet': () => navigate('/setup?step=sheet'),
+      'add-category': async () => {
+        const r = await modal(
+          `<label class="field">Name <input name="label" placeholder="Pet care" required /></label>
+           <label class="field">Kind <select name="kind"><option value="spend">Spend (counts as consumption)</option><option value="income">Income</option><option value="transfer">Transfer (never spend or income)</option><option value="investment">Investment</option><option value="refund">Refund (reduces spend)</option></select></label>
+           <label class="field">What goes here (helps the AI) <input name="description" placeholder="vet, pet food, grooming" /></label>`,
+          { title: 'New category', submit: 'Add' },
+        );
+        if (!r?.label) return;
+        try {
+          const c = await addCategory(r.label, (r.kind as Category['kind']) ?? 'spend', r.description ?? '');
+          toast(`Added "${c.label}" (${c.name})`, 'ok');
+          draw();
+        } catch (err) {
+          toast(String((err as Error).message), 'error');
+        }
+      },
     });
     return db.onChange(draw);
   },
@@ -145,6 +162,13 @@ function page(): string {
       <div class="row between"><h3>Family</h3><button class="btn small" data-action="add-family">+ Add</button></div>
       <p class="small muted">Names help the AI tag transfers to family as <em>family transfer</em> instead of spending.</p>
       ${db.family.rows.length ? raw(db.family.rows.map((f) => `<div class="list-item"><div class="grow">${escapeHtml(f.name)} <span class="muted small">${escapeHtml(f.relation)}</span></div><button class="btn small ghost" data-action="del-family" data-id="${f.id}">✕</button></div>`).join('')) : ''}
+    </div>
+    <div class="card">
+      <div class="row between"><h3>Categories</h3><button class="btn small" data-action="add-category">+ Add</button></div>
+      <p class="small muted">Copied into your sheet's <em>categories</em> tab the first time; edit labels and descriptions there, or add more here. The kind decides how a category counts: spend, income, transfer (never spend), investment, or refund (reduces spend).</p>
+      ${db.loaded ? raw(`<div class="table-wrap"><table><thead><tr><th>Category</th><th>Kind</th><th>Used</th></tr></thead><tbody>${categories()
+        .map((c) => `<tr><td>${escapeHtml(c.label)} <span class="muted small">${escapeHtml(c.name)}</span></td><td><span class="pill muted">${c.kind}</span></td><td class="num">${db.liveTransactions().filter((t) => t.category === c.name).length}</td></tr>`)
+        .join('')}</tbody></table></div>`) : raw('<p class="small muted">Sign in and open a data tab to see the list.</p>')}
     </div>
     <div class="card">
       <h3>Data</h3>

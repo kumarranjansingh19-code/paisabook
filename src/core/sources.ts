@@ -6,7 +6,8 @@
  */
 import { getSpreadsheet, parseSpreadsheetId, readRange, type Cell } from '../google/sheets';
 import { generateJson } from '../llm/gemini';
-import { rowsExtractSchema, sheetMappingSchema, SPEND_CATEGORIES, type RowsExtract, type SheetMapping } from '../llm/schemas';
+import { rowsExtractSchema, sheetMappingSchema, type RowsExtract, type SheetMapping } from '../llm/schemas';
+import { categoryNames } from './categories';
 import { db, newId, stamp, type Source } from '../store/db';
 import { parseLooseDate } from './dates';
 import { parseAmountToPaise } from './money';
@@ -54,7 +55,7 @@ export function applyMapping(rows: Cell[][], m: SheetMapping, startRow = 1): Row
   const failedRows: number[] = [];
   const debitWords = m.debit_words.toLowerCase().split(',').map((s) => s.trim()).filter(Boolean);
   const cell = (r: Cell[], col: number): Cell => (col > 0 ? (r[col - 1] ?? '') : '');
-  const catMap = new Map(SPEND_CATEGORIES.map((c) => [c.replace(/_/g, ''), c]));
+  const catMap = new Map(categoryNames().map((c) => [c.replace(/_/g, ''), c]));
   for (let i = 0; i < rows.length; i++) {
     const rowNo = startRow + i;
     if (rowNo < m.first_data_row) continue;

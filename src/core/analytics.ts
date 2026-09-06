@@ -1,14 +1,22 @@
 import { db, type Transaction } from '../store/db';
-import { SPEND_NETTED, TRANSFER_CATEGORIES } from '../llm/schemas';
+import { categoryKind } from './categories';
 import { monthEnd, monthOf } from './dates';
 
-const NOT_INCOME = new Set(['self_transfer', 'cc_payment', 'paid_for_others', 'received_for_others', 'investment', 'refund']);
-const NOT_SPEND = new Set([...TRANSFER_CATEGORIES, 'investment']);
+/** Category kinds drive the numbers: only 'spend' debits are consumption; only 'refund' credits reduce it. */
+const notSpend = (c: string) => {
+  const k = categoryKind(c);
+  return k === 'transfer' || k === 'investment';
+};
+const notIncome = (c: string) => {
+  const k = categoryKind(c);
+  return k === 'transfer' || k === 'investment' || k === 'refund';
+};
+const isRefund = (c: string) => categoryKind(c) === 'refund';
 
 /** Is this row consumption spending (positive) or a spend-reducing credit (negative)? */
 export function spendPaise(t: Transaction): number {
-  if (t.direction === 'debit') return TRANSFER_CATEGORIES.has(t.category) || t.category === 'investment' ? 0 : t.amount_paise;
-  return SPEND_NETTED.has(t.category) ? -t.amount_paise : 0;
+  if (t.direction === 'debit') return notSpend(t.category) ? 0 : t.amount_paise;
+  return isRefund(t.category) ? -t.amount_paise : 0;
 }
 
 export interface CategoryTotal {
@@ -80,15 +88,15 @@ export function monthlyCashflow(rows: Transaction[]): MonthCashflow[] {
     const kind = kindOf(t.account_id);
     const isBank = kind === 'bank' || kind === 'cash' || kind === 'wallet';
     if (t.direction === 'credit') {
-      if (isBank && !NOT_INCOME.has(t.category)) {
+      if (isBank && !notIncome(t.category)) {
         e.income_paise += t.amount_paise;
         if (t.category === 'salary_income') e.salary_paise += t.amount_paise;
         e.cash_net_paise += t.amount_paise;
       }
-      if (SPEND_NETTED.has(t.category)) e.spent_paise -= t.amount_paise;
+      if (isRefund(t.category)) e.spent_paise -= t.amount_paise;
     } else {
-      if (!NOT_SPEND.has(t.category)) e.spent_paise += t.amount_paise;
-      if (t.category === 'investment') e.invested_paise += t.amount_paise;
+      if (!notSpend(t.category)) e.spent_paise += t.amount_paise;
+      if (categoryKind(t.category) === 'investment') e.invested_paise += t.amount_paise;
       if (t.category === 'family_transfer') e.family_paise += t.amount_paise;
       if (t.category === 'cc_payment') e.cc_payment_paise += t.amount_paise;
       if (isBank && t.category !== 'self_transfer') e.cash_net_paise -= t.amount_paise;

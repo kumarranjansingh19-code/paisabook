@@ -1,7 +1,7 @@
 import type { View } from '../app/router';
 import { html, raw, money, onAction, categoryOptions, catLabel, modal, toast } from '../app/ui';
 import { db, type Transaction } from '../store/db';
-import { SPEND_CATEGORIES } from '../llm/schemas';
+import { categoryNames } from '../core/categories';
 import { setCategory, addRule } from '../core/categorize';
 import { availableMonths } from '../core/analytics';
 import { monthLabel, monthOf, todayIso } from '../core/dates';
@@ -75,7 +75,7 @@ function page(): string {
     <div class="filters">
       <select name="m"><option value="" ${!f.m ? 'selected' : ''}>All months</option>${raw(months.map((m) => `<option value="${m}" ${m === f.m ? 'selected' : ''}>${monthLabel(m)}</option>`).join(''))}</select>
       <select name="acc"><option value="">All accounts</option>${raw(db.accounts.rows.map((a) => `<option value="${a.id}" ${a.id === f.acc ? 'selected' : ''}>${escapeHtml(a.display_name)}</option>`).join(''))}</select>
-      <select name="cat"><option value="">All categories</option><option value="uncategorized" ${f.cat === 'uncategorized' ? 'selected' : ''}>uncategorized</option>${raw(SPEND_CATEGORIES.map((c) => `<option value="${c}" ${c === f.cat ? 'selected' : ''}>${catLabel(c)}</option>`).join(''))}</select>
+      <select name="cat"><option value="">All categories</option><option value="uncategorized" ${f.cat === 'uncategorized' ? 'selected' : ''}>uncategorized</option>${raw(categoryNames().map((c) => `<option value="${c}" ${c === f.cat ? 'selected' : ''}>${catLabel(c)}</option>`).join(''))}</select>
       <select name="status"><option value="">Any status</option>${raw(['confirmed', 'provisional', 'needs_review', 'unmatched'].map((s) => `<option value="${s}" ${s === f.status ? 'selected' : ''}>${s.replace('_', ' ')}</option>`).join(''))}</select>
       <input name="q" placeholder="Search narration / amount" value="${f.q}" />
       <button class="btn" data-action="add">+ Manual</button>
@@ -99,7 +99,7 @@ function list_(): string {
           <span>${t.posted_at}</span>
           <span>${escapeHtml(db.accounts.get(t.account_id)?.display_name ?? t.account_hint ?? '?')}</span>
           ${statusPill(t)}
-          <select class="inline" data-cat="${t.id}">${categoryOptions(t.category, SPEND_CATEGORIES)}</select>
+          <select class="inline" data-cat="${t.id}">${categoryOptions(t.category, categoryNames())}</select>
         </div></div>`,
       )
       .join('')}
@@ -124,7 +124,7 @@ async function openTxn(id: string): Promise<void> {
     `<p><strong>${escapeHtml(t.narration)}</strong></p>
      <p class="muted small">${t.posted_at} · ${escapeHtml(acc?.display_name ?? t.account_hint)} · ${t.direction} ${money(t.amount_paise)}${t.ref_no ? ` · ref ${escapeHtml(t.ref_no)}` : ''}<br/>
      source ${t.source} · status ${t.status} · categorized by ${t.categorized_by || '—'}</p>
-     <label class="field">Category <select name="category">${categoryOptions(t.category, SPEND_CATEGORIES)}</select></label>
+     <label class="field">Category <select name="category">${categoryOptions(t.category, categoryNames())}</select></label>
      <label class="field">Merchant <input name="merchant" value="${escapeHtml(t.merchant)}" /></label>
      <label class="check"><input type="checkbox" name="rule" /> Also create a rule so similar narrations get this category automatically</label>
      <label class="field">Rule fragment (must appear in the narration) <input name="pattern" value="${escapeHtml(suggestFragment(t))}" /></label>
@@ -160,7 +160,7 @@ async function addManual(): Promise<void> {
      <label class="field">Amount (₹) <input name="amount" inputmode="decimal" required /></label>
      <label class="field">Direction <select name="dir"><option value="debit">Spent / debit</option><option value="credit">Received / credit</option></select></label>
      <label class="field">Description <input name="narration" required /></label>
-     <label class="field">Category <select name="category">${categoryOptions('', SPEND_CATEGORIES)}</select></label>`,
+     <label class="field">Category <select name="category">${categoryOptions('', categoryNames())}</select></label>`,
     { title: 'Manual transaction', submit: 'Add' },
   );
   if (!r) return;
