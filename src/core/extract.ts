@@ -18,7 +18,7 @@ const FIN_WORDS =
   /(debited|credited|spent|transaction|txn|payment|paid|purchase|withdraw|received|upi|imps|neft|rtgs|statement|e-statement|bill|due|a\/c|account|card|balance)/i;
 const AMOUNT = /(rs\.?|inr|₹)\s?\d[\d,]*(\.\d+)?|\d[\d,]*(\.\d+)?\s?(rs|inr)/i;
 const FIN_SENDER =
-  /(bank|card|alerts?|statement|nach|hdfc|icici|axis|sbi|kotak|yesbank|idfc|indusind|federal|rbl|amex|americanexpress|citi|hsbc|sc\.com|aubank|bob|pnb|canara|unionbank|onecard|slice|jupiter|fi\.money|niyo|dbs|standardchartered)/i;
+  /(bank|card|alerts?|statement|nach|hdfc|icici|axis|sbi|kotak|yesbank|idfc|indusind|federal|rbl|amex|americanexpress|citi|hsbc|sc\.com|aubank|bob|pnb|canara|unionbank|onecard|slice|jupiter|fi\.money|niyo|dbs|standardchartered|cred\.club|kfintech|camsonline|linkintime|bigshare|mufg|intimeindia)/i;
 const NOISE_SENDER = /(noreply@github|linkedin|facebook|twitter|instagram|youtube|medium\.com|substack|quora|zomato|swiggy|uber\.com|ola|amazon\.in|flipkart|myntra)/i;
 /** PDFs that are never bank/card statements: broker ledgers, demat/CAS, mutual funds, NPS, insurance. */
 const PDF_NOISE = /(zerodha|kite|coin\b|groww|upstox|angelone|indmoney|cdsl|nsdl|cams|kfintech|karvy|protean|\bnps\b|\bcra\b|demat|holding|consolidated account|mutual fund|folio|\bsip\b|epfo|insurance|policy|premium receipt|invoice|receipt|ticket|itinerary|boarding)/i;
@@ -296,7 +296,8 @@ export async function processEmails(emails: FetchedEmail[], opts: { onProgress?:
     `These are emails from a personal Gmail inbox in India. For each one decide the kind and, for transaction alerts, extract the transaction. ` +
     `Long digit runs are masked to the last 4 (XXXX1234) — treat that as the account hint. Amounts must be copied exactly as written, every digit. ` +
     `Only bank accounts and credit/debit cards count; wallet/broker/MF/loan mails are 'other'. A card "payment received" / "payment credited" IS a txn_alert with direction credit on the card. ` +
-    `Dividend, interest, refund and NEFT/IMPS credits to a bank account are txn_alerts too.\n\n`;
+    `Dividend, interest, refund and NEFT/IMPS credits to a bank account are txn_alerts too (registrar mails from KFintech/CAMS/Link Intime announcing a dividend credit name the bank account). ` +
+    `A bill-payment confirmation from CRED / PhonePe / Paytm / a bank ("your credit card bill payment was successful") is a txn_alert with direction credit on THAT CARD (account_hint = the card, not the payer).\n\n`;
   const listing = (batch: FetchedEmail[], chars: number) =>
     batch.map((e, i) => `--- EMAIL ${i} ---\nFrom: ${e.from}\nSubject: ${e.subject}\nReceived: ${e.receivedAt.slice(0, 10)}\nBody: ${redactPii(e.bodyText.slice(0, chars))}`).join('\n\n');
   const secondLook: FetchedEmail[] = [];

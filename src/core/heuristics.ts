@@ -50,7 +50,9 @@ const BANK_DOMAINS: Array<[RegExp, string]> = [
   [/idbi/i, 'IDBI Bank'],
   [/unionbankofindia/i, 'Union Bank of India'],
 ];
-const BANK_NAMES = /\b(HDFC|ICICI|Axis|SBI|Kotak|YES|IDFC(?: FIRST)?|IndusInd|Federal|RBL|American Express|Amex|Citi(?:bank)?|HSBC|Standard Chartered|AU Small Finance|Bank of Baroda|PNB|Canara|Union Bank|OneCard|Slice|Jupiter|Fi|Niyo|DBS|Bandhan|IDBI)\b/i;
+const BANK_NAMES = /\b(HDFC|ICICI|Axis|SBI|State Bank of India|Kotak|YES|IDFC(?: FIRST)?|IndusInd|Federal|RBL|American Express|Amex|Citi(?:bank)?|HSBC|Standard Chartered|AU Small Finance|Bank of Baroda|PNB|Canara|Union Bank|OneCard|Slice|Jupiter|Fi|Niyo|DBS|Bandhan|IDBI)\b/i;
+/** Card-bill payment confirmations (CRED, PhonePe, bank apps): a credit on the card that was paid. */
+const CARD_BILL_PAID = /\b(?:credit card bill|card bill|bill payment)\b[^.]{0,60}\b(?:successful|paid|received|done|complete)|\bpaid\b[^.]{0,40}\b(?:credit card|card) bill\b|\bbill payment (?:was |is )?successful\b/i;
 
 export function institutionOf(from: string, text: string): string {
   const addr = emailAddress(from);
@@ -58,14 +60,14 @@ export function institutionOf(from: string, text: string): string {
   const m = BANK_NAMES.exec(`${from} ${text}`);
   if (!m) return '';
   const n = m[1]!;
-  if (/^sbi$/i.test(n)) return /sbi card|credit card/i.test(text) ? 'SBI Card' : 'SBI';
+  if (/^(sbi|state bank of india)$/i.test(n)) return /sbi card|credit card/i.test(text) ? 'SBI Card' : 'SBI';
   return /bank$/i.test(n) || /express|citi|hsbc|chartered|onecard|slice|jupiter|niyo|dbs|card/i.test(n) ? n : `${n} Bank`;
 }
 
 const NOT_A_TXN =
   /\b(OTP|one[- ]time password|declined|unsuccessful|has failed|could not be processed|reversal request|login|password reset|e-?mandate registration|autopay (?:set|registered)|offer|reward points|cashback offer|pre-?approved|fixed deposit|\bFD\b|term deposit|renew(?:al|ed)?|matur(?:es|ity|ed)|sum (?:assured|insured)|will be (?:debited|credited|deducted)|scheduled|upcoming|reminder|due on)\b/i;
-const DEBIT_WORDS = /\b(debited|spent|paid|withdrawn|purchase|payment of|sent|transferred|charged|used for (?:a )?(?:transaction|txn|purchase)|txn of|has been made)\b/i;
-const CREDIT_WORDS = /\b(credited|received|deposited|refund(?:ed)?|reversed|cashback of|credit of)\b/i;
+const DEBIT_WORDS = /\b(debited|has a debit|debit (?:by|of|for)|spent|paid|withdrawn|purchase|payment of|sent|transferred|charged|used for (?:a )?(?:transaction|txn|purchase)|txn of|has been made)\b/i;
+const CREDIT_WORDS = /\b(credited|has a credit|credit (?:by|of|for)|received|deposited|refund(?:ed)?|reversed|cashback of)\b/i;
 /** Phrases that settle direction outright ("payment of Rs X received" is a credit despite "payment of"). */
 const CREDIT_PHRASES =
   /\b(payment (?:of [^\n]{0,60}?)?(?:has been |was |is |towards [^\n]{0,60}?)?received|(?:have |has )?received (?:\w+ ){0,3}payment|payment (?:of [^\n]{0,60}?)?(?:has been |was |is )?credited|credited to your (?:\w+ ){0,4}(?:card|account|a\/c)|thank you for (?:your |the )?payment|dividend|interest credited|refund(?:ed)? (?:of|to)|cashback (?:of|credited)|credit(?:ed)? (?:of|for) (?:Rs|INR|₹))\b/i;
@@ -79,25 +81,34 @@ const BALANCE_CONTEXT = /(?:bal(?:ance)?|limit|lmt|available|avl|avail|outstandi
  * A masked account/card number: needs a masking marker (XX1234, **1234, X2452,
  * "ending 1234", "ending with 1234") — never a bare 4-digit number.
  */
-const LAST4_RE = /(?:ending(?: with| in)?|last (?:four|4)(?: digits)?)\s*[:\-]?\s*(?:x+|\*+|•+)?\s*(\d{4})\b|(?:\b(?:x{1,}|\*{2,}|•{2,})[\s-]?|(?:^|[^A-Za-z0-9])(?:x{1,}|\*{2,})(?:\s?-\s?|\s)?)(\d{4})\b(?![\d,.]*(?:%|\.\d))/i;
+const LAST4_RE = /(?:ending(?: with| in)?|last (?:four|4)(?: digits)?)\s*[:\-]?\s*(?:x+|\*+|•+)?\s*(\d{4,})\b|(?:\b(?:x{1,}|\*{2,}|•{2,})[\s-]?|(?:^|[^A-Za-z0-9])(?:x{1,}|\*{2,}|•{2,})(?:\s?-\s?|\s)?)(\d{4,})\b(?![\d,.]*(?:%|\.\d))/i;
+/** The digits after a mask can be longer than 4 (SBI prints XXXXX092452): keep the last four. */
+function last4Of(m: RegExpExecArray | RegExpMatchArray | null): string {
+  const d = m ? (m[1] ?? m[2] ?? '') : '';
+  return d.slice(-4);
+}
 const DATE_RE = /\b(\d{1,2}[-/][A-Za-z]{3}[-/]\d{2,4}|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}|\d{4}-\d{2}-\d{2}|\d{1,2}(?:st|nd|rd|th)? [A-Za-z]{3,9},? \d{4}|[A-Za-z]{3,9} \d{1,2},? \d{4})\b/;
-const REF_RE = /\b(?:(?:UPI|IMPS|NEFT|RTGS)\s+)?(?:Ref(?:erence)?\s*(?:No|Number|#|ID)?\.?|RRN|UTR|Transaction (?:ID|Ref(?:erence)?)|Txn (?:ID|Ref|No))\s*(?:is|:)?[:\s.-]*(?=[A-Z0-9]*\d)([A-Z0-9]{6,22})\b/i;
+const REF_RE = /\b(?:(?:UPI|IMPS|NEFT|RTGS)\s+)?(?:Ref(?:erence)?\s*(?:No|Number|#|ID)?\.?|(?:RRN|UTR)\s*(?:No|Number)?\.?|Transaction (?:ID|Ref(?:erence)?)|Txn (?:ID|Ref|No)|\bref)\s*(?:is|:)?[:\s.-]*(?=[A-Z0-9]*\d)([A-Z0-9]{6,22})\b/i;
 const MODE_RE = /\b(UPI|IMPS|NEFT|RTGS|ATM|POS|ECS|NACH|Auto ?Debit|EMI|Standing Instruction|SI)\b/i;
 const STOP = String.raw`\s+(?:on|via|using|ref|upi|thru|through|from|with|at|to|towards|for|and|\d{1,2}[-/:])\b|\.(?:\s|$)|,|;|\(|\s*$`;
 const NARR_TO = new RegExp(String.raw`\b(?:at|to|towards)\s+(?:VPA\s+)?([A-Za-z][^\n.,;(]{2,60}?)(?=${STOP})`, 'gi');
 const NARR_FROM = new RegExp(String.raw`\bfrom\s+([A-Za-z][^\n.,;(]{2,60}?)(?=${STOP})`, 'gi');
 const NARR_INFO = /\b(?:Info|Remarks?|Description|Narration)[:\s-]+([^\n.]{3,60})/gi;
 const NARR_VPA = /\bVPA\s+([\w.\-]+@[\w]+)/gi;
+const NARR_AFTER_DATE = /\bon \d{1,2}[-/]\d{1,2}[-/]\d{2,4}\s*[-:–]\s*([A-Za-z][^.\n]{2,50}?)(?=\.|\s+(?:Avl|Available|Bal)|$)/gi;
+const NARR_PARTY = /\b(?:Sent by|Remitter(?: name)?|Payer|Beneficiary|Payee|Merchant|Paid to|Received from)\s*[:\-]\s*([A-Za-z][^\n.,;(]{2,60}?)(?=\s+(?:Sender|Bank|IFSC|UTR|Ref|Date|Amount)\b|\.|,|;|$)/gi;
 const NARR_FOR = new RegExp(String.raw`\bfor\s+([A-Za-z][^\n.,;(]{2,60}?)(?=${STOP})`, 'gi');
+const NARR_MODE = /\b(?:debit|credit|debited|credited) by ([A-Z]{2,6}(?:\/[A-Z]{2,6})?)\b/gi;
 const NARR_JUNK =
-  /^(?:(?:your|the|you|this|a|an|transaction|txn|payment|purchase|inr|rs\.?|account|a\/c|card|vpa|cancel|block|report|dispute|call|sms|forward|reply|click|visit|log ?in|download|know more|details|help|assistance|queries|any|further|more|complete|confirm|verify|update|secure|safety|security)\b|\d)/i;
+  /^(?:(?:your|the|you|this|a|an|transaction|txn|payment|purchase|inr|rs\.?|account|a\/c|card|vpa|cancel|block|report|dispute|call|sms|forward|reply|click|visit|log ?in|download|know more|details|help|assistance|queries|any|further|more|complete|confirm|verify|update|secure|safety|security|dear|greetings|customer|sbi ?!|state bank)\b|\d)/i;
+const NARR_BAD_INSIDE = /\b(dear customer|greetings|do not reply|auto generated|toll free)\b/i;
 
 function pickNarration(text: string, direction: 'debit' | 'credit'): string {
-  const order = direction === 'credit' ? [NARR_FROM, NARR_INFO, NARR_TO, NARR_VPA, NARR_FOR] : [NARR_TO, NARR_VPA, NARR_INFO, NARR_FOR, NARR_FROM];
+  const order = direction === 'credit' ? [NARR_PARTY, NARR_MODE, NARR_FROM, NARR_INFO, NARR_AFTER_DATE, NARR_TO, NARR_VPA, NARR_FOR] : [NARR_PARTY, NARR_TO, NARR_VPA, NARR_MODE, NARR_INFO, NARR_AFTER_DATE, NARR_FOR, NARR_FROM];
   for (const re of order) {
     for (const m of text.matchAll(re)) {
       const cand = m[1]!.trim().replace(/\s+/g, ' ');
-      if (cand.length >= 3 && !NARR_JUNK.test(cand) && !/^\d[\d,.]*$/.test(cand)) return cand.slice(0, 80);
+      if (cand.length >= 3 && !NARR_JUNK.test(cand) && !NARR_BAD_INSIDE.test(cand) && !/^\d[\d,.]*$/.test(cand)) return cand.slice(0, 80);
     }
   }
   return '';
@@ -139,7 +150,8 @@ export function parseAlert(e: { from: string; subject: string; bodyText: string;
     return best;
   };
   let direction: 'debit' | 'credit';
-  if (CREDIT_PHRASES.test(win)) direction = 'credit';
+  const billPaid = CARD_BILL_PAID.test(text);
+  if (billPaid || CREDIT_PHRASES.test(win)) direction = 'credit';
   else {
     const d = near(DEBIT_WORDS);
     const c = near(CREDIT_WORDS);
@@ -151,9 +163,9 @@ export function parseAlert(e: { from: string; subject: string; bodyText: string;
   // account
   const institution = institutionOf(e.from, text);
   const l4 = LAST4_RE.exec(text);
-  const last4 = l4 ? (l4[1] ?? l4[2])! : '';
+  const last4 = last4Of(l4);
   if (!institution && !last4) return null;
-  const isCard = /\b(credit card|debit card|card)\b/i.test(text.slice(Math.max(0, (l4?.index ?? amount.index) - 60), (l4?.index ?? amount.index) + 60));
+  const isCard = billPaid || /\b(credit card|debit card|card)\b/i.test(text.slice(Math.max(0, (l4?.index ?? amount.index) - 60), (l4?.index ?? amount.index) + 60));
   const account_kind: HeuristicAlert['account_kind'] = isCard ? 'credit_card' : /\b(a\/c|account|acct)\b/i.test(text) ? 'bank' : 'unknown';
   const account_hint = `${institution}${isCard ? ' Credit Card' : account_kind === 'bank' ? ' A/c' : ''}${last4 ? ` XX${last4}` : ''}`.trim();
 
@@ -166,12 +178,12 @@ export function parseAlert(e: { from: string; subject: string; bodyText: string;
     if (parsed && parsed <= received && daysDiff(parsed, received) <= 35) date = parsed;
   }
 
-  let narration = pickNarration(win, direction);
+  let narration = billPaid ? `Card bill payment${/\bCRED\b/i.test(`${e.from} ${text}`) ? ' via CRED' : ''}` : pickNarration(win, direction);
   if (narration && DISCLAIMER.test(narration)) narration = '';
   if (!narration) {
     // Bank-to-bank transfers name no merchant: fall back to "IMPS A/c XX9999".
     const mode = MODE_RE.exec(win)?.[1];
-    const others = [...win.matchAll(new RegExp(LAST4_RE.source, 'gi'))].map((m) => (m[1] ?? m[2])!).filter((n) => n !== last4);
+    const others = [...win.matchAll(new RegExp(LAST4_RE.source, 'gi'))].map((m) => last4Of(m)).filter((n) => n && n !== last4);
     if (!mode) {
       // Card-bill payments name no merchant either ("payment received … via CRED").
       const via = /\b(?:via|through|using)\s+([A-Za-z][A-Za-z0-9 .&-]{1,30}?)(?=\s*(?:on|\.|,|$))/i.exec(win)?.[1];
@@ -216,7 +228,7 @@ export function parseBill(e: { from: string; subject: string; bodyText: string }
   if (!total || !dueRaw) return null;
   const institution = institutionOf(e.from, text);
   const l4 = LAST4_RE.exec(text);
-  const last4 = l4 ? (l4[1] ?? l4[2])! : '';
+  const last4 = last4Of(l4);
   if (!institution && !last4) return null;
   const stmtRaw = /statement (?:date|dated|generated on)[^\d]{0,20}(\d{1,2}[-/ ][A-Za-z]{3}[-/ ,]*\d{2,4}|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}|[A-Za-z]{3,9} \d{1,2},? \d{4})/i.exec(text)?.[1];
   return {
@@ -267,7 +279,7 @@ export function discoverHeuristically(emails: Array<Pick<EmailMeta, 'from' | 'su
       AMOUNT_RE.lastIndex = 0;
     }
     const l4 = LAST4_RE.exec(text);
-    const last4 = l4 ? (l4[1] ?? l4[2])! : '';
+    const last4 = last4Of(l4);
     const near = l4 ? text.slice(Math.max(0, l4.index - 60), l4.index + 60) : text.slice(0, 200);
     const kind: HeuristicProposal['kind'] = /\bcredit card\b|card statement|\bcard\b/i.test(near) || /card/i.test(institution) ? 'credit_card' : 'bank';
     const key = `${institution.toLowerCase()}|${kind}|${last4}`;

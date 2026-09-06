@@ -33,6 +33,24 @@ describe('parseAlert', () => {
     expect(hdfc).toMatchObject({ direction: 'credit', amount: '19,149.00' });
     expect(parseAlert(mail('ICICI Bank <noreply@icicibank.com>', 'Your Fixed Deposit', 'Your Fixed Deposit of Rs 1,00,00,000.00 in A/c XX1234 will automatically get renewed on maturity on 09-08-2026. Interest will be credited.'))).toBeNull();
   });
+  it('reads real SBI CBS alerts (long masks, "has a debit by", text after the date)', () => {
+    const nach = parseAlert(mail('<cbsalerts.sbi@alerts.sbi.bank.in>', 'CBSSBI ALERT', 'Greetings from SBI ! Dear Customer, Your A/C XXXXX092452 has a debit by NACH of Rs 1,000.00 on 12/08/26. Avl Bal Rs 1,19,591.35. Download YONO - SBI. Please do not reply to this auto generated email.'));
+    expect(nach).toMatchObject({ direction: 'debit', amount: '1,000.00', date: '2026-08-12' });
+    expect(nach!.account_hint).toBe('SBI A/c XX2452');
+    expect(nach!.narration).toMatch(/NACH/);
+    const ecs = parseAlert(mail('<cbsalerts.sbi@alerts.sbi.bank.in>', 'CBSSBI ALERT', 'Greetings from SBI ! Your AC XXXXX092452 Debited INR 295.00 on 03/08/26 -ECS/ACH RET CH. Avl Bal INR 18.35.-SBI Please do not reply.'));
+    expect(ecs).toMatchObject({ direction: 'debit', amount: '295.00', date: '2026-08-03' });
+    expect(ecs!.narration).toMatch(/ECS\/ACH RET CH/);
+    const neft = parseAlert(mail('"neftinfo.itps" <neftinfo.itps@alerts.sbi.bank.in>', 'NEFT Transaction', 'Dear Customer, Thank you for banking with State Bank of India. Your account has been credited for NEFT received as per the details given below Credited to Your A/c: XX2452 Amount: INR 1,20,000.00 UTR No.: FBBT262161234567 Date: 04/08/2026 Sent by: Ranjan Kumar Singh Sender Bank IFSC: FDRL0009993'));
+    expect(neft).toMatchObject({ direction: 'credit', amount: '1,20,000.00', date: '2026-08-04', ref_no: 'FBBT262161234567' });
+    expect(neft!.narration).toBe('Ranjan Kumar Singh');
+  });
+  it('reads a CRED bill-payment confirmation as a credit on the card', () => {
+    const a = parseAlert(mail('CRED <protect@cred.club>', 'your credit card bill payment was successful', 'hey, your credit card bill payment was successful. ₹6,495.00 paid to YES Bank •••• 5764 on 20 Aug 2026. ref YDZJ6QQ1X3R. you earned 649 CRED coins.'));
+    expect(a).toMatchObject({ direction: 'credit', amount: '6,495.00', account_kind: 'credit_card', date: '2026-08-20' });
+    expect(a!.account_hint).toContain('5764');
+    expect(a!.narration).toMatch(/Card bill payment/);
+  });
   it('keeps SBI NACH narrations away from footer verbs', () => {
     const a = parseAlert(mail('SBI <alerts@sbi.co.in>', 'CBSSBI ALERT', 'Dear Customer, Your A/c X2452 is debited by Rs 1,000.00 on 03/08/26 for NACH/ECS towards SIP. If not done by you, forward this SMS to 9223008333 to cancel.'));
     expect(a).toMatchObject({ direction: 'debit', amount: '1,000.00' });
