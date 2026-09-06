@@ -49,7 +49,7 @@ async function getMany<T>(store: string, ids: string[]): Promise<Map<string, T>>
   return out;
 }
 
-async function putMany(store: string, items: Array<{ id: string } & Record<string, unknown>>): Promise<void> {
+async function putMany(store: string, items: Array<{ id: string }>): Promise<void> {
   const d = await open();
   if (!d || !items.length) return;
   await new Promise<void>((resolve) => {
@@ -76,7 +76,7 @@ export async function getCachedExtracts<T>(ids: string[]): Promise<Map<string, T
   const m = await getMany<{ id: string; value: T }>('extracts', ids);
   return new Map([...m.entries()].map(([k, v]) => [k, v.value]));
 }
-export const putCachedExtract = <T>(id: string, value: T) => putMany('extracts', [{ id, value }]);
+export const putCachedExtract = <T>(id: string, value: T) => putMany('extracts', [{ id, value } as unknown as { id: string }]);
 
 export async function cacheStats(): Promise<{ metas: number; emails: number }> {
   const d = await open();
