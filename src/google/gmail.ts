@@ -81,7 +81,8 @@ const BATCH_CONCURRENCY = 2;
  */
 const PACE_KEY = 'paisabook.gmailPace.v1';
 const PACE_MAX = 200;
-const PACE_MIN = 10;
+const PACE_MIN = 25; // 5 reads/s — slow but never glacial
+const UNITS_PER_READ = 5;
 let unitsPerSec = readPace();
 let bucket = unitsPerSec;
 let lastRefill = Date.now();
@@ -117,6 +118,10 @@ if (typeof window !== 'undefined') {
     savePace();
   });
 }
+/** Messages per batch request: fewer when the pace is low so one batch never exceeds the bucket. */
+function batchSize(): number {
+  return Math.max(5, Math.min(BATCH_SIZE, Math.floor(unitsPerSec / UNITS_PER_READ)));
+}
 async function throttle(units: number): Promise<void> {
   for (;;) {
     const now = Date.now();
@@ -125,13 +130,15 @@ async function throttle(units: number): Promise<void> {
       lastLimitAt = now;
       savePace();
     }
-    bucket = Math.min(unitsPerSec, bucket + ((now - lastRefill) / 1000) * unitsPerSec);
+    // The bucket must be able to hold one request's cost, or a request could wait forever.
+    const cap = Math.max(unitsPerSec * 2, units);
+    bucket = Math.min(cap, bucket + ((now - lastRefill) / 1000) * unitsPerSec);
     lastRefill = now;
     if (bucket >= units) {
       bucket -= units;
       return;
     }
-    await new Promise((r) => setTimeout(r, Math.ceil(((units - bucket) / unitsPerSec) * 1000)));
+    await new Promise((r) => setTimeout(r, Math.min(5000, Math.ceil(((units - bucket) / unitsPerSec) * 1000))));
   }
 }
 
@@ -165,7 +172,7 @@ export function parseBatch(text: string, boundary: string): BatchPart[] {
  * Items that fail inside the batch (rate limit, transient) are retried one by one.
  */
 async function batchGet(ids: string[], query: string, signal?: AbortSignal): Promise<Message[]> {
-  await throttle(ids.length * 5);
+  await throttle(ids.length * UNITS_PER_READ);
   const boundary = `paisabook_${Math.random().toString(36).slice(2)}`;
   const body =
     ids.map((id, i) => `--${boundary}\r\nContent-Type: application/http\r\nContent-ID: <item${i}>\r\n\r\nGET /gmail/v1/users/me/messages/${id}?${query} HTTP/1.1\r\n\r\n`).join('') +
@@ -206,7 +213,7 @@ export interface FetchOpts<T> {
 async function fetchMany(ids: string[], query: string, opts: FetchOpts<Message>): Promise<Message[]> {
   let done = 0;
   const batches = await mapPool(
-    chunk(ids, BATCH_SIZE),
+    chunk(ids, batchSize()),
     BATCH_CONCURRENCY,
     async (batch, _i, poolSignal) => {
       const msgs = await batchGet(batch, query, poolSignal);
