@@ -82,6 +82,42 @@ export async function rehomeUnmatched(): Promise<number> {
   return n;
 }
 
+/**
+ * Alerts for an institution + masked number we haven't registered, seen at
+ * least twice, are strong evidence of an account: create it and attach them.
+ * Hints without a masked number stay unmatched for the user to place.
+ */
+export async function autoCreateFromUnmatched(): Promise<Account[]> {
+  const groups = new Map<string, { hint: string; count: number }>();
+  for (const t of db.transactions.rows) {
+    if (t.status !== 'unmatched' || !t.account_hint) continue;
+    const last4 = t.account_hint.match(/\d{4,}/g)?.pop()?.slice(-4);
+    const institution = institutionFromHint(t.account_hint);
+    if (!last4 || !institution) continue;
+    const kind = /credit card|\bcard\b/i.test(t.account_hint) ? 'credit_card' : 'bank';
+    const key = `${instKey(institution)}|${kind}|${last4}`;
+    const g = groups.get(key) ?? { hint: t.account_hint, count: 0 };
+    g.count++;
+    groups.set(key, g);
+  }
+  const created: Account[] = [];
+  for (const [key, g] of groups) {
+    if (g.count < 2) continue;
+    const [, kind, last4] = key.split('|') as [string, AccountKind, string];
+    if (matchAccount(g.hint, kind === 'credit_card' ? 'credit_card' : 'bank')) continue;
+    created.push(await addAccount({ kind, institution: institutionFromHint(g.hint), account_ref: `XX${last4}` }));
+  }
+  if (created.length) await rehomeUnmatched();
+  return created;
+}
+
+/** "Axis Bank Credit Card XX8194" → "Axis Bank"; "YES BANK credit card XX1568" → "YES BANK". */
+export function institutionFromHint(hint: string): string {
+  const m = /^(.*?)\s*(?:credit card|debit card|card|a\/c|account|acct|savings|current|xx|\*+|ending|no\.?)\b/i.exec(hint) ?? /^([A-Za-z][A-Za-z .&]{1,30}?)\s*(?=X|\*|\d)/.exec(hint);
+  const inst = (m ? m[1]! : hint).replace(/[^A-Za-z .&]/g, '').trim();
+  return inst.length >= 3 ? inst : '';
+}
+
 /** Distinct account hints from unmatched alerts, grouped, for the accounts page. */
 export function unmatchedHints(): Array<{ hint: string; count: number; last: string }> {
   const m = new Map<string, { hint: string; count: number; last: string }>();

@@ -26,6 +26,18 @@ describe('parseAlert', () => {
     expect(parseAlert(mail('Shop <news@shop.com>', 'Sale', 'Get items at Rs 499 and Rs 999 today!'))).toBeNull();
     expect(parseAlert(mail('Shop <news@shop.com>', 'Sale', 'Everything at Rs 499 today at MyShop.'))).toBeNull(); // no direction word, no account
   });
+  it('reads card payment receipts as credits and skips FD renewals', () => {
+    const yes = parseAlert(mail('YES BANK <alerts@custcom.yes.bank.in>', 'Payment received', 'Dear Customer, we have received the payment of Rs. 6,495.00 towards your YES BANK Credit Card XX5764 on 20-08-2026. Thank you for your payment.'));
+    expect(yes).toMatchObject({ direction: 'credit', amount: '6,495.00', account_kind: 'credit_card' });
+    const hdfc = parseAlert(mail('HDFC Bank <alerts@hdfcbank.net>', 'Payment credited', 'Payment of Rs 19,149.00 has been credited to your HDFC Bank Credit Card ending 4129 on 17-08-2026 via CRED. Available limit Rs 1,80,000.'));
+    expect(hdfc).toMatchObject({ direction: 'credit', amount: '19,149.00' });
+    expect(parseAlert(mail('ICICI Bank <noreply@icicibank.com>', 'Your Fixed Deposit', 'Your Fixed Deposit of Rs 1,00,00,000.00 in A/c XX1234 will automatically get renewed on maturity on 09-08-2026. Interest will be credited.'))).toBeNull();
+  });
+  it('keeps SBI NACH narrations away from footer verbs', () => {
+    const a = parseAlert(mail('SBI <alerts@sbi.co.in>', 'CBSSBI ALERT', 'Dear Customer, Your A/c X2452 is debited by Rs 1,000.00 on 03/08/26 for NACH/ECS towards SIP. If not done by you, forward this SMS to 9223008333 to cancel.'));
+    expect(a).toMatchObject({ direction: 'debit', amount: '1,000.00' });
+    expect(a!.narration).not.toMatch(/cancel|forward/i);
+  });
   it('reads an SBI IMPS debit where the beneficiary is also mentioned', () => {
     const a = parseAlert(mail('SBI <alerts@sbi.co.in>', 'Alert', 'Your A/c X2452 is debited for Rs 2,500.00 on 12/08/26 and A/c XX9999 credited (IMPS Ref no 123456789012).'));
     expect(a).toMatchObject({ direction: 'debit', amount: '2,500.00', date: '2026-08-12', ref_no: '123456789012' });

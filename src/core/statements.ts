@@ -100,6 +100,7 @@ export async function importStatement(
       'Extract this Indian bank or credit-card statement into structured form. ' +
         'Copy amounts EXACTLY as printed (never compute). Every transaction row must use its OWN printed date converted to YYYY-MM-DD ' +
         '(statements print DD-MM-YYYY or DD/MM/YY) — never reuse the statement period dates for rows. ' +
+        'Include EVERY posted row, including small fee, tax, GST, markup, interest and charge lines — they are transactions. ' +
         'Skip summary/total lines, opening balance and reward-point lines. If this document is not a bank/card statement (receipt, invoice, broker ledger, insurance) set statement_kind=not_a_statement.\n\n' +
         redactPii(text).slice(0, 120_000),
       { tier: 'reasoning', signal: opts.signal },

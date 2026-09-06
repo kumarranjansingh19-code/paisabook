@@ -8,7 +8,7 @@ import { db } from '../store/db';
 import { categorizeAll } from './categorize';
 import { processEmails, scanMailbox, type ScanProgress } from './extract';
 import { importStatement, type ImportOutcome, type PendingPdf } from './statements';
-import { rehomeUnmatched } from './accounts';
+import { autoCreateFromUnmatched, rehomeUnmatched } from './accounts';
 import { daysAgoIso, todayIso } from './dates';
 import { usage } from '../llm/gemini';
 import { mapPool } from './pool';
@@ -119,6 +119,8 @@ export async function runSync(opts: SyncOptions): Promise<void> {
     }
 
     await importPending({ force: opts.forceStatements, signal });
+    const created = await autoCreateFromUnmatched();
+    if (created.length) log(`Accounts created from repeated alerts: ${created.map((a) => a.display_name).join(', ')}`);
 
     if (!opts.skipCategorize) {
       syncState.phase = 'Categorizing';
