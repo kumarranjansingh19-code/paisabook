@@ -192,6 +192,7 @@ function wire(root: HTMLElement, step: Step): void {
         if (!db.loaded) await db.load();
         const scan = await scanMailbox(daysAgoIso(60), todayIso(), {
           reprocess: true,
+          metaOnly: true,
           onProgress: (p) => (status.innerHTML = spinner(`${p.phase} ${p.total ? `${p.done}/${p.total}` : ''}`)),
         });
         status.innerHTML = spinner(`AI is reading ${scan.emails.length} emails for account names…`);

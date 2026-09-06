@@ -112,7 +112,7 @@ function extractMessage(body: string): string | undefined {
 }
 
 /** Authenticated raw fetch with retry on 429/5xx (honours Retry-After). Throws AuthRequiredError on 401. */
-export async function gfetchRaw(url: string, init: RequestInit = {}, retries = 5): Promise<Response> {
+export async function gfetchRaw(url: string, init: RequestInit = {}, retries = 8): Promise<Response> {
   const givenHeaders = (init.headers ?? {}) as Record<string, string>;
   for (let attempt = 0; ; attempt++) {
     const res = await fetch(url, {
@@ -129,7 +129,8 @@ export async function gfetchRaw(url: string, init: RequestInit = {}, retries = 5
       // 403 is only retryable when it's a rate limit, not a scope/permission problem.
       if (res.status === 403 && !/rate ?limit|quota|usageLimits/i.test(body)) throw new ApiError(403, extractMessage(body) ?? '403 Forbidden', body);
       const retryAfter = Number(res.headers.get('Retry-After')) || 0;
-      const wait = retryAfter ? retryAfter * 1000 : 1000 * 2 ** attempt + Math.random() * 500;
+      // Per-minute quotas reset within 60s: back off up to 20s per attempt (≈2 min total over 8 retries).
+      const wait = retryAfter ? retryAfter * 1000 : Math.min(1000 * 2 ** attempt, 20_000) + Math.random() * 1000;
       await new Promise((r) => setTimeout(r, Math.min(wait, 30_000)));
       continue;
     }

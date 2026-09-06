@@ -62,6 +62,7 @@ export async function listMessageIds(q: string, max = 5000, signal?: AbortSignal
   do {
     const params = new URLSearchParams({ q, maxResults: String(Math.min(500, max - ids.length)) });
     if (pageToken) params.set('pageToken', pageToken);
+    await throttle(5);
     const res = await gfetch<{ messages?: Array<{ id: string }>; nextPageToken?: string }>(`${BASE}/messages?${params}`, { signal });
     for (const m of res.messages ?? []) ids.push(m.id);
     pageToken = res.nextPageToken;
@@ -71,6 +72,27 @@ export async function listMessageIds(q: string, max = 5000, signal?: AbortSignal
 
 const BATCH_SIZE = 20;
 const BATCH_CONCURRENCY = 2;
+
+/**
+ * Gmail allows 15,000 quota units per minute per user; messages.get costs 5.
+ * A token bucket keeps us near 150 units/s (30 reads/s) so a big inbox is
+ * read steadily instead of hitting 429s and stalling for a minute.
+ */
+const UNITS_PER_SEC = 150;
+let bucket = UNITS_PER_SEC * 2;
+let lastRefill = Date.now();
+async function throttle(units: number): Promise<void> {
+  for (;;) {
+    const now = Date.now();
+    bucket = Math.min(UNITS_PER_SEC * 2, bucket + ((now - lastRefill) / 1000) * UNITS_PER_SEC);
+    lastRefill = now;
+    if (bucket >= units) {
+      bucket -= units;
+      return;
+    }
+    await new Promise((r) => setTimeout(r, Math.ceil(((units - bucket) / UNITS_PER_SEC) * 1000)));
+  }
+}
 
 interface BatchPart {
   status: number;
@@ -102,6 +124,7 @@ export function parseBatch(text: string, boundary: string): BatchPart[] {
  * Items that fail inside the batch (rate limit, transient) are retried one by one.
  */
 async function batchGet(ids: string[], query: string, signal?: AbortSignal): Promise<Message[]> {
+  await throttle(ids.length * 5);
   const boundary = `paisabook_${Math.random().toString(36).slice(2)}`;
   const body =
     ids.map((id, i) => `--${boundary}\r\nContent-Type: application/http\r\nContent-ID: <item${i}>\r\n\r\nGET /gmail/v1/users/me/messages/${id}?${query} HTTP/1.1\r\n\r\n`).join('') +
@@ -126,6 +149,7 @@ async function batchGet(ids: string[], query: string, signal?: AbortSignal): Pro
       }
     }
     if (part && part.status === 404) continue; // message deleted meanwhile
+    await throttle(5);
     out.push(await gfetch<Message>(`${BASE}/messages/${ids[i]}?${query}`, { signal }));
   }
   return out;

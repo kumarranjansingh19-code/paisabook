@@ -55,7 +55,11 @@ export interface ScanResult {
 }
 
 /** List → metadata → prefilter → full bodies for candidates not yet processed. */
-export async function scanMailbox(from: string, to: string, opts: { reprocess?: boolean; broad?: boolean; onProgress?: (p: ScanProgress) => void; signal?: AbortSignal } = {}): Promise<ScanResult> {
+export async function scanMailbox(
+  from: string,
+  to: string,
+  opts: { reprocess?: boolean; broad?: boolean; /** headers + snippet only (account discovery) — 1 read per email, no bodies */ metaOnly?: boolean; onProgress?: (p: ScanProgress) => void; signal?: AbortSignal } = {},
+): Promise<ScanResult> {
   const p = opts.onProgress ?? (() => {});
   p({ phase: 'Listing mail', done: 0, total: 0 });
   const ids = await listMessageIds(buildQuery(from, to, opts.broad), 8000, opts.signal);
@@ -65,9 +69,16 @@ export async function scanMailbox(from: string, to: string, opts: { reprocess?: 
   // Anything that never gets a full read is logged as skipped so we don't re-read it next time.
   const skipped: EmailLog[] = [];
   const candidateIds: string[] = [];
+  const candidates: EmailMeta[] = [];
   for (const m of metas) {
-    if (looksFinancial(m)) candidateIds.push(m.id);
-    else skipped.push({ id: m.id, received_at: m.receivedAt, from: emailAddress(m.from), subject: m.subject.slice(0, 80), kind: 'skipped', outcome: 'prefilter', processed_at: stamp() });
+    if (looksFinancial(m)) {
+      candidateIds.push(m.id);
+      candidates.push(m);
+    } else skipped.push({ id: m.id, received_at: m.receivedAt, from: emailAddress(m.from), subject: m.subject.slice(0, 80), kind: 'skipped', outcome: 'prefilter', processed_at: stamp() });
+  }
+  if (opts.metaOnly) {
+    if (!opts.reprocess) await db.append(db.emails, skipped);
+    return { listed: ids.length, candidates: candidates.length, alreadyDone: ids.length - fresh.length, emails: candidates.map((m) => ({ ...m, bodyText: m.snippet, attachments: [] })) };
   }
   p({ phase: 'Downloading candidates', done: 0, total: candidateIds.length });
   const emails = await fetchFull(candidateIds, (n) => p({ phase: 'Downloading candidates', done: n, total: candidateIds.length }), opts.signal);

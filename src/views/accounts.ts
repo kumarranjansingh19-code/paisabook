@@ -23,7 +23,7 @@ export const accountsView: View = {
       discover: async (el) => {
         const box = el.closest('.card')!.querySelector<HTMLElement>('#disc')!;
         box.innerHTML = spinner('Scanning 60 days of mail…');
-        const scan = await scanMailbox(daysAgoIso(60), todayIso(), { reprocess: true, onProgress: (p) => (box.innerHTML = spinner(`${p.phase} ${p.total ? `${p.done}/${p.total}` : ''}`)) });
+        const scan = await scanMailbox(daysAgoIso(60), todayIso(), { reprocess: true, metaOnly: true, onProgress: (p) => (box.innerHTML = spinner(`${p.phase} ${p.total ? `${p.done}/${p.total}` : ''}`)) });
         box.innerHTML = spinner('AI is looking for account names…');
         const props = await discoverAccounts(scan.emails);
         box.innerHTML = props.length
