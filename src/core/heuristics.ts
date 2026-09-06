@@ -96,11 +96,12 @@ const NARR_FROM = new RegExp(String.raw`\bfrom\s+([A-Za-z][^\n.,;(]{2,60}?)(?=${
 const NARR_INFO = /\b(?:Info|Remarks?|Description|Narration)[:\s-]+([^\n.]{3,60})/gi;
 const NARR_VPA = /\bVPA\s+([\w.\-]+@[\w]+)/gi;
 const NARR_AFTER_DATE = /\bon \d{1,2}[-/]\d{1,2}[-/]\d{2,4}\s*[-:–]\s*([A-Za-z][^.\n]{2,50}?)(?=\.|\s+(?:Avl|Available|Bal)|$)/gi;
-const NARR_PARTY = /\b(?:Sent by|Remitter(?: name)?|Payer|Beneficiary|Payee|Merchant|Paid to|Received from)\s*[:\-]\s*([A-Za-z][^\n.,;(]{2,60}?)(?=\s+(?:Sender|Bank|IFSC|UTR|Ref|Date|Amount)\b|\.|,|;|$)/gi;
+const NARR_PARTY =
+  /\b(?:Sent by|Remitter(?: name)?|Payer(?: name)?|Beneficiary(?: name)?|Payee(?: name)?|Merchant(?: name)?|Paid to|Received from|Transferred to)\s*[:\-]\s*([A-Za-z0-9][^\n.,;(]{1,60}?)(?=\s+(?:Sender|Bank|IFSC|UTR|Ref|Date|Amount|Card|Credit|Debit|Account|A\/c|on|at|via|HDFC|ICICI|Axis|SBI|Kotak|YES|IDFC|IndusInd|Federal|RBL|Citi|HSBC|Jupiter|Standard)\b|\.|,|;|$)/gi;
 const NARR_FOR = new RegExp(String.raw`\bfor\s+([A-Za-z][^\n.,;(]{2,60}?)(?=${STOP})`, 'gi');
 const NARR_MODE = /\b(?:debit|credit|debited|credited) by ([A-Z]{2,6}(?:\/[A-Z]{2,6})?)\b/gi;
 const NARR_JUNK =
-  /^(?:(?:your|the|you|this|a|an|transaction|txn|payment|purchase|inr|rs\.?|account|a\/c|card|vpa|cancel|block|report|dispute|call|sms|forward|reply|click|visit|log ?in|download|know more|details|help|assistance|queries|any|further|more|complete|confirm|verify|update|secure|safety|security|dear|greetings|customer|sbi ?!|state bank)\b|\d)/i;
+  /^(?:(?:your|the|you|this|a|an|transaction|txn|payment|purchase|inr|rs\.?|account|a\/c|card|vpa|cancel|block|report|dispute|call|sms|forward|reply|click|visit|log ?in|download|know more|details|help|assistance|queries|any|further|more|complete|confirm|verify|update|secure|safety|security|dear|greetings|customer|sbi ?!|state bank|sir|madam)(?![a-z])|\d)/i;
 const NARR_BAD_INSIDE = /\b(dear customer|greetings|do not reply|auto generated|toll free)\b/i;
 
 function pickNarration(text: string, direction: 'debit' | 'credit'): string {

@@ -51,6 +51,21 @@ describe('parseAlert', () => {
     expect(a!.account_hint).toContain('8801');
     expect(a!.narration).toMatch(/Card bill payment/);
   });
+  it('reads the Axis "summary" alert (amount in subject, Merchant Name label, limits to ignore)', () => {
+    const a = parseAlert({
+      from: 'Axis Bank Alerts <alerts@axis.bank.in>',
+      subject: 'INR 298.99 spent on credit card no. XX9127',
+      receivedAt: '2026-08-21T13:05:00.000Z',
+      bodyText: "21-08-2026 Dear Asha Verma, Here's the summary of your Axis Bank Credit Card Transaction: Transaction Amount: INR 298.99 Merchant Name: INNOVATIVE Axis Bank Credit Card No. XX9127 Date & Time: 21-08-2026, 18:33:31 IST Available Limit*: INR 740180.8 Total Credit Limit*: INR 746000 *The information above includes the available and total credit limit across all of your Axis Bank credit cards. If this transaction was not done by you, please call 1860 419 5555.",
+    });
+    expect(a).toMatchObject({ direction: 'debit', amount: '298.99', account_kind: 'credit_card', date: '2026-08-21', narration: 'INNOVATIVE' });
+    expect(a!.account_hint).toBe('Axis Bank Credit Card XX9127');
+  });
+  it('never uses a greeting as the merchant', () => {
+    const a = parseAlert(mail('<cbsalerts.sbi@alerts.sbi.bank.in>', 'CBSSBI ALERT', 'Greetings from SBI! Dear Sir/Madam, Your A/c XXXXX097310 is credited by Rs 10,000.00 on 04/08/26 by transfer from Mr ROHAN MEHTA. Avl Bal Rs 1,09,591.35.'));
+    expect(a).toMatchObject({ direction: 'credit', amount: '10,000.00' });
+    expect(a!.narration).not.toMatch(/sbi|dear|sir|madam/i);
+  });
   it('keeps SBI NACH narrations away from footer verbs', () => {
     const a = parseAlert(mail('SBI <alerts@sbi.co.in>', 'CBSSBI ALERT', 'Dear Customer, Your A/c X7310 is debited by Rs 1,000.00 on 03/08/26 for NACH/ECS towards SIP. If not done by you, forward this SMS to 9223008333 to cancel.'));
     expect(a).toMatchObject({ direction: 'debit', amount: '1,000.00' });
