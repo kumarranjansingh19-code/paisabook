@@ -112,10 +112,67 @@ export const settingsView: View = {
         location.reload();
       },
       'change-sheet': () => navigate('/setup?step=sheet'),
+      'pw-toggle': (el) => {
+        const id = el.dataset.id!;
+        if (revealed.has(id)) revealed.delete(id);
+        else revealed.add(id);
+        draw();
+      },
+      'pw-edit': async (el) => {
+        const a = db.accounts.get(el.dataset.id!);
+        if (!a) return;
+        const r = await modal(
+          `<p class="small muted">${a.password_hint ? `Your hint: <em>${escapeHtml(a.password_hint)}</em>` : 'Banks usually explain the password in the statement email (date of birth, PAN, mobile digits…).'}</p>
+           <label class="field">Password <input name="pw" value="${escapeHtml(settings().passwords[a.id] ?? '')}" autocomplete="off" autocapitalize="off" /></label>
+           <label class="field">Hint for yourself (stored in the sheet, so keep it vague) <input name="hint" value="${escapeHtml(a.password_hint)}" /></label>`,
+          { title: `${a.display_name} · PDF password` },
+        );
+        if (!r) return;
+        const passwords = { ...settings().passwords };
+        if (r.pw) passwords[a.id] = r.pw;
+        else delete passwords[a.id];
+        saveSettings({ passwords });
+        if ((r.hint ?? '') !== a.password_hint) {
+          db.update(db.accounts, a.id, { password_hint: r.hint ?? '' });
+          await db.flush();
+        }
+        toast(r.pw ? 'Password saved on this device' : 'Password removed', 'ok');
+        draw();
+      },
+      'pw-remove': async (el) => {
+        const a = db.accounts.get(el.dataset.id!);
+        if (!a || !(await confirmDialog(`Remove the saved password for ${a.display_name}?`, 'Remove'))) return;
+        const passwords = { ...settings().passwords };
+        delete passwords[a.id];
+        saveSettings({ passwords });
+        revealed.delete(a.id);
+        draw();
+      },
     });
+    // The list needs the accounts from the sheet; load them if we're signed in and haven't yet.
+    if (!db.loaded && hasValidToken() && settings().spreadsheetId) db.load().then(draw).catch(() => {});
     return db.onChange(draw);
   },
 };
+
+const revealed = new Set<string>();
+
+function passwordRows(pw: Record<string, string>): string {
+  if (!db.loaded) return `<p class="small muted">Sign in and open any data tab once to list your accounts here.</p>`;
+  const accs = db.accounts.rows.filter((a) => a.is_active && (a.kind === 'bank' || a.kind === 'credit_card'));
+  if (!accs.length) return `<p class="small muted">No accounts yet.</p>`;
+  return accs
+    .map((a) => {
+      const v = pw[a.id];
+      const shown = revealed.has(a.id);
+      return `<div class="list-item"><div class="grow"><div class="title">${escapeHtml(a.display_name)}</div>
+        <div class="sub">${v ? `<code>${shown ? escapeHtml(v) : '•'.repeat(Math.min(12, v.length))}</code>` : '<span class="pill warn">not set</span>'}${a.password_hint ? ` · hint: ${escapeHtml(a.password_hint)}` : ''}</div></div>
+        ${v ? `<button class="btn small ghost" data-action="pw-toggle" data-id="${a.id}">${shown ? 'Hide' : 'Show'}</button>` : ''}
+        <button class="btn small" data-action="pw-edit" data-id="${a.id}">${v ? 'Edit' : 'Set'}</button>
+        ${v ? `<button class="btn small ghost danger" data-action="pw-remove" data-id="${a.id}">Remove</button>` : ''}</div>`;
+    })
+    .join('');
+}
 
 function page(): string {
   const s = settings();
@@ -141,8 +198,13 @@ function page(): string {
       ${db.family.rows.length ? raw(db.family.rows.map((f) => `<div class="list-item"><div class="grow">${escapeHtml(f.name)} <span class="muted small">${escapeHtml(f.relation)}</span></div><button class="btn small ghost" data-action="del-family" data-id="${f.id}">✕</button></div>`).join('')) : ''}
     </div>
     <div class="card">
+      <h3>Statement PDF passwords</h3>
+      <p class="small muted">Saved only on this device, never in the sheet. Used to open the statements each bank emails you.</p>
+      ${raw(passwordRows(s.passwords))}
+    </div>
+    <div class="card">
       <h3>Data</h3>
-      <p class="small muted">Statement passwords saved on this device: ${Object.keys(s.passwords).length}. Everything else lives in your Google Sheet.</p>
+      <p class="small muted">Everything except the passwords above lives in your Google Sheet.</p>
       <div class="row"><button class="btn" data-action="export">Export CSV</button><button class="btn danger" data-action="reset">Forget this device</button></div>
     </div>`;
 }
