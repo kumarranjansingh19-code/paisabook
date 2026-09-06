@@ -89,14 +89,14 @@ function page(): string {
             .map(
               (c) => `<div class="bar-row clickable" data-action="cat" data-cat="${escape(c.category)}">
                 <span>${escape(catLabel(c.category))} <span class="muted small">· ${c.txn_count}</span></span>
-                <span class="num">${money(c.total_paise, true)} <span class="muted small">${pct(c.total_paise, spend)}%</span></span>
+                <span class="num">${money(c.total_paise, true)}<span class="muted small">${pct(c.total_paise, spend)}%</span></span>
                 <div class="track"><div class="fill" style="width:${pct(Math.max(c.total_paise, 0), maxCat)}%"></div></div></div>`,
             )
             .join('')}</div>`)
         : raw('<p class="muted">Nothing yet.</p>')}
     </div>
 
-    <div class="grid">
+    <div class="grid cards">
       <div class="card"><h3>Top merchants</h3>${merchants.length ? raw(merchants.map((m) => `<div class="list-item"><div class="grow"><div class="title">${escape(m.merchant)}</div><div class="sub">${m.txn_count}×</div></div><div class="nowrap">${money(m.total_paise, true)}</div></div>`).join('')) : raw('<p class="muted">—</p>')}</div>
       <div class="card"><h3>By account</h3>${byAcc.length ? raw(byAcc.map((a) => `<div class="list-item clickable" data-action="acc" data-acc="${a.account_id}"><div class="grow"><div class="title">${escape(db.accounts.get(a.account_id)?.display_name ?? '?')}</div><div class="sub">${a.txn_count}×</div></div><div class="nowrap">${money(a.total_paise, true)}</div></div>`).join('')) : raw('<p class="muted">—</p>')}</div>
     </div>
