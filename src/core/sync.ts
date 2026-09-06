@@ -6,7 +6,7 @@
  */
 import { db } from '../store/db';
 import { categorizeAll } from './categorize';
-import { processEmails, scanMailbox, type ScanProgress } from './extract';
+import { fetchStatementMails, processEmails, scanMailbox, type ScanProgress } from './extract';
 import { importStatement, type ImportOutcome, type PendingPdf } from './statements';
 import { autoCreateFromUnmatched, rehomeUnmatched } from './accounts';
 import { daysAgoIso, todayIso } from './dates';
@@ -281,6 +281,59 @@ export function applyOutcome(pdf: PendingPdf, res: ImportOutcome): void {
   emit();
 }
 
+/**
+ * Statements only, for a period: find statement mails, queue their PDFs,
+ * import what the saved passwords can open. Cheap — no inbox scan, no AI on
+ * alerts. Use it after adding a password or when a month shows "pending".
+ */
+export async function fetchStatements(from: string, to: string): Promise<void> {
+  if (syncState.running) return;
+  controller = new AbortController();
+  const signal = controller.signal;
+  Object.assign(syncState, { running: true, phase: 'Finding statements', progress: null, log: [], error: null, summary: {}, startedAt: Date.now(), llmCallsAtStart: usage.calls });
+  emit();
+  const onProgress = (p: ScanProgress) => {
+    syncState.progress = p;
+    syncState.phase = p.phase;
+    emit();
+  };
+  try {
+    log(`Looking for statement emails ${from} → ${to} (statements only)`);
+    const r = await fetchStatementMails(from, to, { onProgress, signal });
+    const known = new Set(syncState.pendingPdfs.map((p) => p.sha));
+    let queued = 0;
+    for (const p of r.pdfs) {
+      if (known.has(p.sha)) continue;
+      syncState.pendingPdfs.push(p);
+      queued++;
+    }
+    log(`${r.emails} statement emails; ${queued} new PDFs queued, ${r.alreadyImported} already imported`);
+    syncState.summary = { statement_emails: r.emails, queued, already_imported: r.alreadyImported };
+    await importPending({ signal });
+    const rehomed = await rehomeUnmatched();
+    if (rehomed) log(`${rehomed} alerts attached to accounts learned from statements`);
+    if (syncState.pendingPdfs.length) log(`${syncState.pendingPdfs.length} PDF${syncState.pendingPdfs.length > 1 ? 's' : ''} still waiting for a password or an account (see below)`);
+    await categorizeAll(undefined, signal).catch((err) => log(`categorize: ${String((err as Error).message)}`));
+    syncState.phase = 'done';
+    log(`Done in ${Math.round((Date.now() - syncState.startedAt) / 1000)}s using ${usage.calls - syncState.llmCallsAtStart} AI calls`);
+  } catch (err) {
+    if ((err as Error).name === 'AbortError') {
+      syncState.phase = 'stopped';
+      log('Stopped.');
+    } else {
+      syncState.error = String((err as Error).message ?? err);
+      syncState.phase = 'error';
+      log(`✖ ${syncState.error}`);
+    }
+  } finally {
+    syncState.running = false;
+    syncState.progress = null;
+    controller = null;
+    emit();
+    db.notify();
+  }
+}
+
 /** Retry one queued PDF with a password / account chosen by the user. */
 export async function retryPdf(sha: string, opts: { password?: string; rememberFor?: string; accountId?: string }): Promise<ImportOutcome> {
   const pdf = syncState.pendingPdfs.find((p) => p.sha === sha);
@@ -289,11 +342,25 @@ export async function retryPdf(sha: string, opts: { password?: string; rememberF
   const res = await importStatement(pdf, { password: opts.password ?? null, rememberFor: opts.rememberFor ?? null });
   applyOutcome(pdf, res);
   if (res.status === 'imported') {
+    // A password that just worked is probably the same for that account's other queued statements: sweep them.
+    if (syncState.pendingPdfs.length) await importPending();
     await rehomeUnmatched();
     await categorizeAll().catch((err) => log(`categorize: ${String(err)}`));
     db.notify();
   }
   return res;
+}
+
+/** After a password is saved on an account: try every waiting PDF with it, no sync needed. */
+export async function importWithNewPassword(): Promise<{ imported: number; remaining: number }> {
+  loadPendingFromSheet();
+  const before = syncState.pendingPdfs.length;
+  if (!before) return { imported: 0, remaining: 0 };
+  await importPending();
+  const remaining = syncState.pendingPdfs.length;
+  if (before - remaining > 0) await categorizeAll().catch(() => {});
+  db.notify();
+  return { imported: before - remaining, remaining };
 }
 
 /** A PDF the user picked from their phone/computer. */

@@ -1,7 +1,7 @@
 import type { View } from '../app/router';
 import { html, raw, onAction, toast, modal, pct } from '../app/ui';
 import { db } from '../store/db';
-import { abortSync, defaultPeriod, dropPdf, loadPendingFromSheet, onSync, queueLocalPdf, retryPdf, runSync, syncState } from '../core/sync';
+import { abortSync, defaultPeriod, dropPdf, fetchStatements, loadPendingFromSheet, onSync, queueLocalPdf, retryPdf, runSync, syncState } from '../core/sync';
 import { escapeHtml } from '../core/text';
 import { daysAgoIso, todayIso } from '../core/dates';
 import { categorizeAll } from '../core/categorize';
@@ -43,6 +43,10 @@ export const syncView: View = {
         void runSync({ from: period.from, to: period.to, reprocess, broad, forceStatements: force });
       },
       stop: () => abortSync(),
+      'fetch-statements': () => {
+        if (period.from > period.to) return toast('"From" must be before "To"', 'error');
+        void fetchStatements(period.from, period.to);
+      },
       dedupe: async (el) => {
         el.setAttribute('disabled', '');
         const n = await dedupeAlerts();
@@ -93,8 +97,8 @@ function page(): string {
       <div id="status">${raw(status())}</div>
     </div>
     <div class="card">
-      <h3>Statement PDFs</h3>
-      <p class="muted small">Statements found in mail land here. Ones that need a password wait for you. You can also pick PDFs from your device.</p>
+      <div class="row between"><h3>Statement PDFs</h3><button class="btn small" data-action="fetch-statements" ${syncState.running ? 'disabled' : ''}>Fetch statements only</button></div>
+      <p class="muted small">Cheap alternative to a full sync: finds just the statement emails in the period above, queues their PDFs, and imports the ones your saved passwords open. Ones that need a password wait here and are imported the moment you add it. You can also pick PDFs from your device.</p>
       <label class="field">Import a PDF from this device <input type="file" name="pdf" accept="application/pdf,.pdf" multiple /></label>
       <div id="queue">${raw(queue())}</div>
     </div>

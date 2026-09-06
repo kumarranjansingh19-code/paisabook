@@ -8,6 +8,7 @@ import { scanMailbox } from '../core/extract';
 import { discoverAccounts } from '../core/discover';
 import { daysAgoIso, todayIso } from '../core/dates';
 import { categorizeAll } from '../core/categorize';
+import { importWithNewPassword } from '../core/sync';
 
 export const accountsView: View = {
   title: 'Accounts',
@@ -180,5 +181,8 @@ async function passwordDialog(id: string): Promise<void> {
   else delete passwords[id];
   saveSettings({ passwords });
   db.notify();
-  toast(r.pw ? 'Password saved on this device' : 'Password removed', 'ok');
+  if (!r.pw) return toast('Password removed', 'ok');
+  toast('Password saved — trying waiting statements…');
+  const { imported, remaining } = await importWithNewPassword();
+  toast(imported ? `${imported} statement${imported > 1 ? 's' : ''} imported${remaining ? `, ${remaining} still waiting` : ''}` : remaining ? `Saved. ${remaining} PDF${remaining > 1 ? 's' : ''} still need a different password` : 'Password saved on this device', 'ok');
 }

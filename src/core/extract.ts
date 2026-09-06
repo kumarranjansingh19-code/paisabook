@@ -233,6 +233,55 @@ export async function scanMailbox(
   return { ...base, ...(interrupted ? { interrupted } : {}), candidates: emails.length, emails };
 }
 
+/**
+ * Statements only: ask Gmail for mails in the period that carry a PDF and
+ * mention a statement, download just those attachments and queue them. No
+ * header scan of the whole inbox, no AI — a few quota units per statement.
+ */
+export async function fetchStatementMails(
+  from: string,
+  to: string,
+  opts: { onProgress?: (p: ScanProgress) => void; signal?: AbortSignal } = {},
+): Promise<{ emails: number; pdfs: PendingPdf[]; alreadyImported: number }> {
+  const p = opts.onProgress ?? (() => {});
+  const extra = settings().gmailExtraQuery.trim();
+  const q = `after:${gmailDate(from)} before:${gmailDate(to, 1)} -in:spam -in:trash has:attachment filename:pdf (statement OR "e-statement" OR estatement OR stmt OR "account statement" OR "card statement")${extra ? ` ${extra}` : ''}`;
+  p({ phase: 'Finding statement emails', done: 0, total: 0 });
+  const ids = await listMessageIds(q, 400, opts.signal);
+  p({ phase: 'Reading statement emails', done: 0, total: ids.length });
+  const cachedFull = await getCachedEmails(ids);
+  const emails: FetchedEmail[] = [...cachedFull.values()];
+  await fetchFull(
+    ids.filter((id) => !cachedFull.has(id)),
+    { signal: opts.signal, onBatch: (es) => { emails.push(...es); void putCachedEmails(es); }, onProgress: (n) => p({ phase: 'Reading statement emails', done: cachedFull.size + n, total: ids.length }) },
+  );
+  const pdfs: PendingPdf[] = [];
+  let alreadyImported = 0;
+  let done = 0;
+  for (const e of emails) {
+    done++;
+    p({ phase: 'Downloading statement PDFs', done, total: emails.length });
+    if (PDF_NOISE.test(`${e.from} ${e.subject}`) || !detectStatement(e)) continue;
+    const guess = db.activeAccounts().find((a) => a.statement_sender && a.statement_sender === emailAddress(e.from));
+    for (const att of e.attachments) {
+      if ((!/pdf/i.test(att.mimeType) && !/\.pdf$/i.test(att.filename)) || PDF_NOISE.test(att.filename)) continue;
+      try {
+        const data = await downloadAttachment(e.id, att.attachmentId);
+        const sha = await shaOf(data);
+        const existing = db.statements.get(sha);
+        if (existing && existing.status !== 'failed') {
+          alreadyImported++;
+          continue;
+        }
+        pdfs.push({ sha, filename: att.filename, data, attachmentId: att.attachmentId, emailId: e.id, from: e.from, subject: e.subject, receivedAt: e.receivedAt, hint: passwordHint(e.bodyText), accountGuess: guess?.id ?? '' });
+      } catch {
+        /* skip this attachment; the next fetch retries it */
+      }
+    }
+  }
+  return { emails: emails.length, pdfs, alreadyImported };
+}
+
 export interface ProcessSummary {
   alerts: number;
   duplicates: number;
