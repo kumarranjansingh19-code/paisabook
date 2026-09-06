@@ -64,7 +64,7 @@ function page(): string {
     ${!months.includes(month) ? raw('<p class="muted center small">No transactions in this month yet.</p>') : ''}
     <div class="grid">
       <div class="stat"><div class="label">Real spend</div><div class="value">${money(spend, true)}</div>
-        <div class="sub">${settle.settled ? raw('<span class="pill ok">✓ settled</span>') : raw(`<span class="pill warn" title="Card spends are final only once the statement covering the month end is imported">⏳ ${settle.awaiting.length} card statement${settle.awaiting.length > 1 ? 's' : ''} pending</span>`)}
+        <div class="sub">${settle.settled ? raw('<span class="pill ok">✓ settled</span>') : raw(`<span class="pill warn" title="${settle.awaiting.map(escape).join(', ')}">⏳ ${settle.awaiting.length} pending</span>`)}
         ${prevFlow ? raw(`<span class="muted"> · ${delta(spend, prevFlow.spent_paise)} vs last month</span>`) : ''}</div></div>
       <div class="stat"><div class="label">Income</div><div class="value">${money(thisFlow?.income_paise ?? 0, true)}</div><div class="sub">${thisFlow?.salary_paise ? `salary ${money(thisFlow.salary_paise, true)}` : 'into bank accounts'}</div></div>
       <div class="stat"><div class="label">Invested</div><div class="value">${money(thisFlow?.invested_paise ?? 0, true)}</div><div class="sub">family ${money(thisFlow?.family_paise ?? 0, true)}</div></div>

@@ -354,3 +354,6 @@ select.inline { height: 32px; width: auto; max-width: 100%; padding: 0 30px 0 12
 select.inline:focus { box-shadow: none; border-color: var(--md-primary); }
 .txn .meta { gap: 6px 8px; }
 .row > label.field { flex: 1 1 150px; }
+/* status chips inside stat tiles wrap instead of spilling out */
+.stat .sub { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; line-height: 1.3; }
+.stat .sub .pill { white-space: nowrap; height: 22px; line-height: 22px; padding: 0 8px; font-size: .75rem; }
