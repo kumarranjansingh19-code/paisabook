@@ -3,9 +3,9 @@ import { generateJson } from '../llm/gemini';
 import { statementSchema, type StatementExtract } from '../llm/schemas';
 import { extractPdfText, PdfPasswordError } from './pdf';
 import { reconcile, type IncomingTxn } from './reconcile';
-import { matchAccount } from './accounts';
+import { addAccount, instKey, matchAccount } from './accounts';
 import { parseAmountToPaise } from './money';
-import { redactPii } from './text';
+import { emailAddress, redactPii } from './text';
 import { sha256HexAsync } from './hash';
 import { settings, saveSettings } from '../store/local';
 
@@ -25,7 +25,7 @@ export interface PendingPdf {
 }
 
 export type ImportOutcome =
-  | { status: 'imported'; statement: Statement; inserted: number; matched: number; review: number }
+  | { status: 'imported'; statement: Statement; inserted: number; matched: number; review: number; createdAccount?: string }
   | { status: 'already_imported' }
   | { status: 'ignored'; reason: string }
   | { status: 'needs_password'; hint: string | null }
@@ -111,8 +111,25 @@ export async function importStatement(
     return { status: 'ignored', reason: 'not a bank/card statement' };
   }
 
+  if (BROKER_RE.test(`${extract.institution} ${extract.account_hint} ${pdf.subject} ${pdf.filename}`)) {
+    return { status: 'ignored', reason: 'broker / mutual fund / NPS document, not a bank statement' };
+  }
   const hint = `${extract.institution} ${extract.account_hint}`.trim();
-  const account = matchAccount(hint, extract.statement_kind) ?? passwordAccount ?? (pdf.accountGuess ? db.accounts.get(pdf.accountGuess) ?? null : null);
+  const last4 = extract.account_hint.match(/\d{4,}/g)?.map((d) => d.slice(-4)) ?? [];
+  // The password that opened the file is only an ownership hint when the institution and kind agree —
+  // people reuse one password (DOB…) across banks.
+  const sameInst = (a: Account | null) => !!a && (!extract.institution || instKey(a.institution) === instKey(extract.institution)) && a.kind === extract.statement_kind;
+  let account = matchAccount(hint, extract.statement_kind) ?? (sameInst(passwordAccount) ? passwordAccount : null);
+  if (!account && pdf.accountGuess) {
+    const g = db.accounts.get(pdf.accountGuess) ?? null;
+    if (sameInst(g)) account = g;
+  }
+  let createdAccount: string | undefined;
+  if (!account && extract.institution && (last4.length || extract.transactions.length >= 3)) {
+    // A statement is authoritative: it names the institution and the masked number. Create the account.
+    account = await addAccount({ kind: extract.statement_kind, institution: extract.institution, account_ref: last4.map((l) => `XX${l}`).join(' / '), statement_sender: emailAddress(pdf.from) });
+    createdAccount = account.display_name;
+  }
   if (!account) return { status: 'needs_account', hint, institution: extract.institution };
 
   // Remember the password on this device only if asked.
@@ -179,8 +196,10 @@ export async function importStatement(
   } else {
     await db.append(db.statements, [statement]);
   }
-  return { status: 'imported', statement, inserted: result.inserted, matched: statement.matched, review: result.flaggedForReview };
+  return { status: 'imported', statement, inserted: result.inserted, matched: statement.matched, review: result.flaggedForReview, ...(createdAccount ? { createdAccount } : {}) };
 }
+
+const BROKER_RE = /\b(zerodha|kite|coin|groww|upstox|angel ?one|indmoney|cdsl|nsdl|cams|kfintech|karvy|protean|nps|cra\b|demat|holding statement|consolidated account statement|mutual fund|folio|sip\b|ppf|epf|epfo|insurance|policy)\b/i;
 
 /** Lightweight bill row from an email body (no PDF) so due dates work. */
 export async function recordBillNotice(

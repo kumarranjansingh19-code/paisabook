@@ -20,14 +20,32 @@ const AMOUNT = /(rs\.?|inr|₹)\s?\d[\d,]*(\.\d+)?|\d[\d,]*(\.\d+)?\s?(rs|inr)/i
 const FIN_SENDER =
   /(bank|card|alerts?|statement|nach|hdfc|icici|axis|sbi|kotak|yesbank|idfc|indusind|federal|rbl|amex|americanexpress|citi|hsbc|sc\.com|aubank|bob|pnb|canara|unionbank|onecard|slice|jupiter|fi\.money|niyo|dbs|standardchartered)/i;
 const NOISE_SENDER = /(noreply@github|linkedin|facebook|twitter|instagram|youtube|medium\.com|substack|quora|zomato|swiggy|uber\.com|ola|amazon\.in|flipkart|myntra)/i;
+/** PDFs that are never bank/card statements: broker ledgers, demat/CAS, mutual funds, NPS, insurance. */
+const PDF_NOISE = /(zerodha|kite|coin\b|groww|upstox|angelone|indmoney|cdsl|nsdl|cams|kfintech|karvy|protean|\bnps\b|\bcra\b|demat|holding|consolidated account|mutual fund|folio|\bsip\b|epfo|insurance|policy|premium receipt|invoice|receipt|ticket|itinerary|boarding)/i;
 
+const MARKETING_SUBJECT =
+  /(offer|reward|voucher|milestone|emi\b|upgrade|festival|sale\b|% ?off|congratulations|refer|pre-?approved|loan\b|insurance|invitation|webinar|newsletter|tips|beware|awareness|survey|feedback|unlock|exciting|introducing|announc)/i;
+
+/**
+ * Should this email be downloaded and read? Mail from a bank or card issuer
+ * is read unless the subject is plainly marketing (snippets are too short to
+ * judge a transaction alert by); everything else needs money words + an amount.
+ */
 export function looksFinancial(m: EmailMeta): boolean {
   const text = `${m.subject} ${m.snippet}`;
   const from = emailAddress(m.from);
   if (NOISE_SENDER.test(from) && !/statement|debited|credited/i.test(text)) return false;
-  if (m.hasPdf && FIN_SENDER.test(from)) return true;
-  if (FIN_SENDER.test(from) && FIN_WORDS.test(text)) return true;
+  if (FIN_SENDER.test(from)) {
+    if (m.hasPdf) return true;
+    if (FIN_WORDS.test(text) || AMOUNT.test(text)) return true;
+    return !MARKETING_SUBJECT.test(m.subject);
+  }
   return FIN_WORDS.test(text) && AMOUNT.test(text);
+}
+
+/** Bank-sender mail the bulk model called "other" but which mentions an amount deserves a second, stronger read. */
+export function deservesSecondLook(e: FetchedEmail): boolean {
+  return FIN_SENDER.test(emailAddress(e.from)) && AMOUNT.test(e.bodyText) && !MARKETING_SUBJECT.test(e.subject);
 }
 
 /**
@@ -35,7 +53,7 @@ export function looksFinancial(m: EmailMeta): boolean {
  * hundred headers instead of every email in the period. "Broad" scans skip it.
  */
 const FOCUSED_TERMS =
-  '(debited OR credited OR spent OR statement OR "e-statement" OR transaction OR txn OR "credit card" OR "debit card" OR UPI OR IMPS OR NEFT OR "amount due" OR "total due" OR "minimum due" OR "payment received" OR withdrawn OR deposited OR "Rs." OR INR OR "a/c")';
+  '(debited OR credited OR spent OR statement OR "e-statement" OR transaction OR txn OR "credit card" OR "debit card" OR UPI OR IMPS OR NEFT OR "amount due" OR "total due" OR "minimum due" OR "payment received" OR withdrawn OR deposited OR "Rs." OR INR OR "a/c" OR from:(bank OR card OR alerts OR alert OR statement OR statements OR jupiter OR onecard OR slice))';
 
 export function buildQuery(from: string, to: string, broad = false): string {
   const extra = settings().gmailExtraQuery.trim();
@@ -265,42 +283,58 @@ export async function processEmails(emails: FetchedEmail[], opts: { onProgress?:
   await persist();
   p({ phase: 'AI reading emails', done: 0, total: leftovers.length, note: `${summary.heuristic} read by rules` });
 
-  // Pass 2 — AI, in small batches, persisted after each batch.
+  // Pass 2 — AI (cheap model), in small batches, persisted after each batch.
+  // Bank-sender mail it calls "other" despite an amount is held back for pass 3.
+  const PROMPT =
+    `These are emails from a personal Gmail inbox in India. For each one decide the kind and, for transaction alerts, extract the transaction. ` +
+    `Long digit runs are masked to the last 4 (XXXX1234) — treat that as the account hint. Amounts must be copied exactly as written, every digit. ` +
+    `Only bank accounts and credit/debit cards count; wallet/broker/MF/loan mails are 'other'. A card "payment received" / "payment credited" IS a txn_alert with direction credit on the card. ` +
+    `Dividend, interest, refund and NEFT/IMPS credits to a bank account are txn_alerts too.\n\n`;
+  const listing = (batch: FetchedEmail[], chars: number) =>
+    batch.map((e, i) => `--- EMAIL ${i} ---\nFrom: ${e.from}\nSubject: ${e.subject}\nReceived: ${e.receivedAt.slice(0, 10)}\nBody: ${redactPii(e.bodyText.slice(0, chars))}`).join('\n\n');
+  const secondLook: FetchedEmail[] = [];
   let done = 0;
-  await mapPool(
-    chunk(leftovers, 12),
-    2,
-    async (batch, _i, poolSignal) => {
-      let results: EmailBatchResult['results'] = [];
-      try {
-        const r = await generateJson<EmailBatchResult>(
-          emailBatchSchema,
-          `These are emails from a personal Gmail inbox in India. For each one decide the kind and, for transaction alerts, extract the transaction. ` +
-            `Long digit runs are masked to the last 4 (XXXX1234) — treat that as the account hint. Amounts must be copied exactly as written. ` +
-            `Only bank accounts and credit/debit cards count; wallet/broker/MF/loan mails are 'other'. A card "payment received" credit IS a txn_alert (credit on the card).\n\n` +
-            batch.map((e, i) => `--- EMAIL ${i} ---\nFrom: ${e.from}\nSubject: ${e.subject}\nReceived: ${e.receivedAt.slice(0, 10)}\nBody: ${redactPii(e.bodyText.slice(0, 2500))}`).join('\n\n'),
-          { tier: 'bulk', signal: poolSignal },
-        );
-        results = r.results;
-      } catch (err) {
-        if (poolSignal.aborted) throw err;
-        summary.llmErrors += batch.length;
-        // leave unlogged so the next run retries them
+  const runPass = async (items: FetchedEmail[], tier: 'bulk' | 'reasoning', per: number, chars: number, phase: string, holdBack: boolean) => {
+    done = 0;
+    await mapPool(
+      chunk(items, per),
+      2,
+      async (batch, _i, poolSignal) => {
+        let results: EmailBatchResult['results'] = [];
+        try {
+          const r = await generateJson<EmailBatchResult>(emailBatchSchema, PROMPT + listing(batch, chars), { tier, signal: poolSignal });
+          results = r.results;
+        } catch (err) {
+          if (poolSignal.aborted) throw err;
+          summary.llmErrors += batch.length;
+          done += batch.length; // left unlogged so the next run retries them
+          p({ phase, done, total: items.length });
+          return;
+        }
+        const byIndex = new Map(results.map((r) => [r.index, r]));
+        for (let i = 0; i < batch.length; i++) {
+          const e = batch[i]!;
+          const r = byIndex.get(i);
+          if (holdBack && (!r || r.kind === 'other') && deservesSecondLook(e)) {
+            secondLook.push(e);
+            continue;
+          }
+          await handleOne(e, r, 'ai');
+          summary.ai++;
+        }
         done += batch.length;
-        p({ phase: 'AI reading emails', done, total: leftovers.length });
-        return;
-      }
-      const byIndex = new Map(results.map((r) => [r.index, r]));
-      for (let i = 0; i < batch.length; i++) {
-        await handleOne(batch[i]!, byIndex.get(i), 'ai');
-        summary.ai++;
-      }
-      done += batch.length;
-      await persist();
-      p({ phase: 'AI reading emails', done, total: leftovers.length, note: `${summary.alerts} alerts, ${summary.pdfs.length} PDFs` });
-    },
-    opts.signal,
-  );
+        await persist();
+        p({ phase, done, total: items.length, note: `${summary.alerts} alerts, ${summary.pdfs.length} PDFs` });
+      },
+      opts.signal,
+    );
+  };
+  await runPass(leftovers, 'bulk', 12, 2500, 'AI reading emails', true);
+  // Pass 3 — the stronger model, fewer emails per call, fuller bodies.
+  if (secondLook.length) {
+    p({ phase: 'AI second look', done: 0, total: secondLook.length, note: `${secondLook.length} bank emails re-read closely` });
+    await runPass(secondLook, 'reasoning', 5, 6000, 'AI second look', false);
+  }
   await persist();
   return summary;
 
@@ -333,10 +367,11 @@ export async function processEmails(emails: FetchedEmail[], opts: { onProgress?:
             outcome = outcome === 'ignored' ? 'bill_recorded' : `${outcome}+bill`;
           }
         }
-        if (isStatementish || e.hasPdf) {
+        if ((isStatementish || e.hasPdf) && !PDF_NOISE.test(`${e.from} ${e.subject}`)) {
           for (const att of e.attachments) {
             if (!/pdf/i.test(att.mimeType) && !/\.pdf$/i.test(att.filename)) continue;
             if (!isStatementish && !/statement|stmt|estatement|e-statement/i.test(`${att.filename} ${e.subject}`)) continue;
+            if (PDF_NOISE.test(att.filename)) continue;
             try {
               const data = await downloadAttachment(e.id, att.attachmentId);
               const sha = await shaOf(data);

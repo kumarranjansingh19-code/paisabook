@@ -4,7 +4,7 @@ import { html, raw, onAction, toast, spinner, modal } from '../app/ui';
 import { settings, saveSettings } from '../store/local';
 import { hasValidToken, isLocalhost, redirectUri, startSignIn } from '../google/auth';
 import { testGemini } from '../llm/gemini';
-import { db } from '../store/db';
+import { db, newId, stamp } from '../store/db';
 import { parseSpreadsheetId } from '../google/sheets';
 import { scanMailbox } from '../core/extract';
 import { discoverAccounts, type AccountProposal } from '../core/discover';
@@ -113,6 +113,7 @@ const STEP_HTML: Record<Step, () => string> = {
   accounts: () => html`<div class="card">
       <h2>4. Your accounts</h2>
       <p class="muted">PaisaBook will scan the last 60 days of mail and propose the bank accounts and cards it sees. Tick the ones that are yours. You can add more later under Accounts.</p>
+      <label class="field">Your name as it appears in bank transfers (so money you move between your own accounts isn't counted as spending) <input name="selfName" placeholder="e.g. Ranjan Kumar Singh" /></label>
       <div class="row">
         <button class="btn primary" data-action="discover">Scan my mail for accounts</button>
         <button class="btn ghost" data-action="skip-accounts">Skip, I'll add them manually</button>
@@ -235,11 +236,13 @@ function wire(root: HTMLElement, step: Step): void {
         window.removeEventListener('paisabook:ratelimit', onLimit);
       }
     },
-    'skip-accounts': () => {
+    'skip-accounts': async () => {
+      await saveSelf(root);
       saveSettings({ setupDone: true });
       navigate('/accounts');
     },
     'add-selected': async (el) => {
+      await saveSelf(root);
       const box = el.closest<HTMLElement>('#discover-status')!;
       const picks = [...box.querySelectorAll<HTMLInputElement>('input[type=checkbox]:checked')];
       for (const p of picks) {
@@ -283,6 +286,12 @@ function renderProposals(box: HTMLElement, proposals: AccountProposal[], partial
     )
     .join('')}
     <div class="row"><button class="btn primary" data-action="add-selected">Add selected</button><button class="btn" data-action="add-manual">Add another manually</button></div></div>`;
+}
+
+async function saveSelf(root: HTMLElement): Promise<void> {
+  const name = root.querySelector<HTMLInputElement>('input[name=selfName]')?.value.trim();
+  if (!name || db.family.rows.some((f) => f.relation === 'self')) return;
+  await db.append(db.family, [{ id: newId('fam'), name, relation: 'self', created_at: stamp() }]);
 }
 
 /** Accepts the downloaded client JSON (web or installed) or a bare client id. */

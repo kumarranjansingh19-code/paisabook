@@ -205,11 +205,19 @@ function extractMessage(body: string): string | undefined {
 export async function gfetchRaw(url: string, init: RequestInit = {}, retries = 8): Promise<Response> {
   const givenHeaders = (init.headers ?? {}) as Record<string, string>;
   for (let attempt = 0; ; attempt++) {
-    const res = await fetch(url, {
-      ...init,
-      signal: withTimeout(init.signal),
-      headers: { Authorization: `Bearer ${await accessToken()}`, ...(init.body && !givenHeaders['Content-Type'] ? { 'Content-Type': 'application/json' } : {}), ...givenHeaders },
-    });
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        ...init,
+        signal: withTimeout(init.signal),
+        headers: { Authorization: `Bearer ${await accessToken()}`, ...(init.body && !givenHeaders['Content-Type'] ? { 'Content-Type': 'application/json' } : {}), ...givenHeaders },
+      });
+    } catch (err) {
+      // "Failed to fetch" / timeout: transient network trouble — retry a few times before giving up
+      if (init.signal?.aborted || attempt >= 3) throw err;
+      await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+      continue;
+    }
     if (res.status === 401) {
       const t = getToken();
       if (t?.refreshToken && attempt === 0) {

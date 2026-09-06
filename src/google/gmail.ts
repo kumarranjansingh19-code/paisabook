@@ -1,4 +1,4 @@
-import { gfetch, gfetchRaw } from './auth';
+import { ApiError, gfetch, gfetchRaw } from './auth';
 import { chunk, mapPool } from '../core/pool';
 import { b64urlToBytes, b64urlToText, stripHtml } from '../core/text';
 
@@ -110,7 +110,8 @@ export function gmailPace(): number {
 if (typeof window !== 'undefined') {
   window.addEventListener('paisabook:ratelimit', (e) => {
     const d = (e as CustomEvent<{ status: number; url?: string }>).detail;
-    if (d.status !== 429 || !/gmail/.test(d.url ?? '')) return;
+    // Gmail reports its per-minute quota as 403 "Quota exceeded", not 429.
+    if ((d.status !== 429 && d.status !== 403) || !/gmail/.test(d.url ?? '')) return;
     if (Date.now() - lastLimitAt < 5000) return; // one halving per burst
     lastLimitAt = Date.now();
     unitsPerSec = Math.max(PACE_MIN, Math.floor(unitsPerSec / 2));
@@ -171,7 +172,7 @@ export function parseBatch(text: string, boundary: string): BatchPart[] {
  * Fetch many messages in one HTTP round trip via the Gmail batch endpoint.
  * Items that fail inside the batch (rate limit, transient) are retried one by one.
  */
-async function batchGet(ids: string[], query: string, signal?: AbortSignal): Promise<Message[]> {
+async function batchGet(ids: string[], query: string, signal?: AbortSignal, depth = 0): Promise<Message[]> {
   await throttle(ids.length * UNITS_PER_READ);
   const boundary = `paisabook_${Math.random().toString(36).slice(2)}`;
   const body =
@@ -186,6 +187,8 @@ async function batchGet(ids: string[], query: string, signal?: AbortSignal): Pro
   const rb = /boundary="?([^";]+)"?/.exec(res.headers.get('Content-Type') ?? '')?.[1];
   const parts = rb ? parseBatch(await res.text(), rb) : [];
   const out: Message[] = [];
+  const failed: string[] = [];
+  let quotaHit = false;
   for (let i = 0; i < ids.length; i++) {
     const part = parts[i];
     if (part && part.status === 200) {
@@ -193,12 +196,22 @@ async function batchGet(ids: string[], query: string, signal?: AbortSignal): Pro
         out.push(JSON.parse(part.body) as Message);
         continue;
       } catch {
-        /* fall through to single fetch */
+        /* fall through */
       }
     }
     if (part && part.status === 404) continue; // message deleted meanwhile
-    await throttle(5);
-    out.push(await gfetch<Message>(`${BASE}/messages/${ids[i]}?${query}`, { signal }));
+    if (part && (part.status === 429 || part.status === 403)) quotaHit = true;
+    failed.push(ids[i]!);
+  }
+  if (failed.length) {
+    // Items rate-limited inside the batch: slow down and retry them together (not one by one — that
+    // only digs the quota hole deeper). Two levels deep and still failing → surface as a rate limit.
+    if (depth >= 2) throw new ApiError(429, 'Gmail quota exceeded (batch items kept failing)');
+    if (quotaHit && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('paisabook:ratelimit', { detail: { status: 403, waitMs: 20_000, attempt: depth, url: 'gmail-batch' } }));
+    }
+    await new Promise((r) => setTimeout(r, quotaHit ? 20_000 : 2_000));
+    out.push(...(await batchGet(failed, query, signal, depth + 1)));
   }
   return out;
 }

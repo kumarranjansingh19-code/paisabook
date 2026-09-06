@@ -175,7 +175,7 @@ export function applyOutcome(pdf: PendingPdf, res: ImportOutcome): void {
   switch (res.status) {
     case 'imported': {
       const acc = db.accounts.get(res.statement.account_id);
-      log(`✔ ${pdf.filename}: ${acc?.display_name ?? '?'} ${res.statement.period_start || ''}→${res.statement.period_end}: ${res.inserted} new, ${res.matched} matched alerts${res.review ? `, ${res.review} to review` : ''}${res.statement.notes ? ` — ${res.statement.notes}` : ''}`);
+      log(`✔ ${pdf.filename}: ${acc?.display_name ?? '?'} ${res.statement.period_start || ''}→${res.statement.period_end}: ${res.inserted} new, ${res.matched} matched alerts${res.review ? `, ${res.review} to review` : ''}${res.createdAccount ? ` · new account created: ${res.createdAccount}` : ''}${res.statement.notes ? ` — ${res.statement.notes}` : ''}`);
       drop();
       break;
     }

@@ -57,4 +57,15 @@ describe('discoverHeuristically', () => {
     expect(r.proposals.map((p) => `${p.institution}|${p.kind}|${p.last4}|${p.seen}`)).toEqual(['HDFC Bank|bank|1234|2', 'Axis Bank|credit_card|8194|1']);
     expect(r.proposals[1]!.statement_sender).toBe('cc.statements@axisbank.com');
   });
+  it('ignores marketing, bank names inside bodies, and bare 4-digit numbers', () => {
+    const r = discoverHeuristically([
+      { from: 'offers@bandhanbank.com', subject: 'Sibling Showdown Recipe Contest & More', snippet: 'Win Rs 2000 vouchers. Card 2000 winners.' },
+      { from: 'promo@yesbank.in', subject: 'Get Pre-Approved Express Loan on your YES BANK Credit Card', snippet: 'Rs 5,00,000 loan' },
+      { from: 'noreply@zerodha.com', subject: 'Coin by Zerodha — Updates', snippet: 'SBI account statement of SBI Mutual Fund' },
+      { from: 'alerts@indusind.com', subject: 'Stop losing out – Switch to premium banking now', snippet: 'A/c 1860 Rs 10,000' },
+      { from: 'alerts@sbi.co.in', subject: 'CBSSBI ALERT', snippet: 'Your A/c X2452 is credited Rs 90.00 on 12/08/26 by RADICO' },
+      { from: 'alerts@sbi.co.in', subject: 'NEFT Transaction', snippet: 'Your A/c X2452 is credited Rs 1,20,000 by NEFT' },
+    ]);
+    expect(r.proposals.map((p) => `${p.institution}|${p.kind}|${p.last4}`)).toEqual(['SBI|bank|2452']);
+  });
 });
