@@ -91,7 +91,9 @@ const DATE_RE = /\b(\d{1,2}[-/][A-Za-z]{3}[-/]\d{2,4}|\d{1,2}[-/.]\d{1,2}[-/.]\d
 const REF_RE = /\b(?:(?:UPI|IMPS|NEFT|RTGS)\s+)?(?:Ref(?:erence)?\s*(?:No|Number|#|ID)?\.?|(?:RRN|UTR)\s*(?:No|Number)?\.?|Transaction (?:ID|Ref(?:erence)?)|Txn (?:ID|Ref|No)|\bref)\s*(?:is|:)?[:\s.-]*(?=[A-Z0-9]*\d)([A-Z0-9]{6,22})\b/i;
 const MODE_RE = /\b(UPI|IMPS|NEFT|RTGS|ATM|POS|ECS|NACH|Auto ?Debit|EMI|Standing Instruction|SI)\b/i;
 const STOP = String.raw`\s+(?:on|via|using|ref|upi|thru|through|from|with|at|to|towards|for|and|\d{1,2}[-/:])\b|\.(?:\s|$)|,|;|\(|\s*$`;
-const NARR_TO = new RegExp(String.raw`\b(?:at|to|towards)\s+(?:VPA\s+)?([A-Za-z][^\n.,;(]{2,60}?)(?=${STOP})`, 'gi');
+/** "towards X" / "at X" name the counterparty far more reliably than a bare "to", which also starts verbs ("to inform you"). */
+const NARR_TOWARDS = new RegExp(String.raw`\b(?:towards|at)\s+(?:VPA\s+)?([A-Za-z0-9][^\n.,;(]{2,60}?)(?=${STOP})`, 'gi');
+const NARR_TO = new RegExp(String.raw`\bto\s+(?:VPA\s+)?([A-Za-z][^\n.,;(]{2,60}?)(?=${STOP})`, 'gi');
 const NARR_FROM = new RegExp(String.raw`\bfrom\s+([A-Za-z][^\n.,;(]{2,60}?)(?=${STOP})`, 'gi');
 const NARR_INFO = /\b(?:Info|Remarks?|Description|Narration)[:\s-]+([^\n.]{3,60})/gi;
 const NARR_VPA = /\bVPA\s+([\w.\-]+@[\w]+)/gi;
@@ -101,11 +103,11 @@ const NARR_PARTY =
 const NARR_FOR = new RegExp(String.raw`\bfor\s+([A-Za-z][^\n.,;(]{2,60}?)(?=${STOP})`, 'gi');
 const NARR_MODE = /\b(?:debit|credit|debited|credited) by ([A-Z]{2,6}(?:\/[A-Z]{2,6})?)\b/gi;
 const NARR_JUNK =
-  /^(?:(?:your|the|you|this|a|an|transaction|txn|payment|purchase|inr|rs\.?|account|a\/c|card|vpa|cancel|block|report|dispute|call|sms|forward|reply|click|visit|log ?in|download|know more|details|help|assistance|queries|any|further|more|complete|confirm|verify|update|secure|safety|security|dear|greetings|customer|sbi ?!|state bank|sir|madam)(?![a-z])|\d)/i;
-const NARR_BAD_INSIDE = /\b(dear customer|greetings|do not reply|auto generated|toll free)\b/i;
+  /^(?:(?:your|the|you|this|a|an|transaction|txn|payment|purchase|inr|rs\.?|account|a\/c|card|vpa|cancel|block|report|dispute|call|sms|forward|reply|click|visit|log ?in|download|know more|details|help|assistance|queries|any|further|more|complete|confirm|verify|update|secure|safety|security|dear|greetings|customer|sbi ?!|state bank|sir|madam|inform|notify|let you know|note|ensure|check|view|avail|know|see|get|use|make|pay|enjoy|continue|proceed|be|have|has|is|was)(?![a-z])|\d)/i;
+const NARR_BAD_INSIDE = /\b(dear customer|greetings|do not reply|auto generated|toll free|inform you|that rs|that inr|you that)\b/i;
 
 function pickNarration(text: string, direction: 'debit' | 'credit'): string {
-  const order = direction === 'credit' ? [NARR_PARTY, NARR_MODE, NARR_FROM, NARR_INFO, NARR_AFTER_DATE, NARR_TO, NARR_VPA, NARR_FOR] : [NARR_PARTY, NARR_TO, NARR_VPA, NARR_MODE, NARR_INFO, NARR_AFTER_DATE, NARR_FOR, NARR_FROM];
+  const order = direction === 'credit' ? [NARR_PARTY, NARR_MODE, NARR_FROM, NARR_INFO, NARR_AFTER_DATE, NARR_TOWARDS, NARR_TO, NARR_VPA, NARR_FOR] : [NARR_PARTY, NARR_TOWARDS, NARR_VPA, NARR_TO, NARR_MODE, NARR_INFO, NARR_AFTER_DATE, NARR_FOR, NARR_FROM];
   for (const re of order) {
     for (const m of text.matchAll(re)) {
       const cand = m[1]!.trim().replace(/\s+/g, ' ');

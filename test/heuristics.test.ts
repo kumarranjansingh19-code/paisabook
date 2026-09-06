@@ -10,6 +10,11 @@ describe('parseAlert', () => {
     expect(a!.account_hint).toContain('XX1234');
     expect(a!.narration.toLowerCase()).toContain('swiggy');
   });
+  it('reads the real HDFC InstaAlert wording (preamble before the amount, merchant after "towards")', () => {
+    const a = parseAlert({ ...mail('HDFC Bank InstaAlerts <alerts@hdfcbank.bank.in>', 'A payment was made using your Credit Card', 'HDFC BANK --> Dear Customer, Greetings from HDFC Bank. We would like to inform you that Rs. 620.00 has been debited from your HDFC Bank Credit Card ending 6042 towards SWIGGY E COM on 16 Aug, 2026 at 20:23:26 . To check your available balance, outstanding amount, or view recent transactions, you may use: Mycards. Important Note: If you did not authorise this transaction, please act immediately.'), receivedAt: '2026-08-16T15:00:00.000Z' });
+    expect(a).toMatchObject({ direction: 'debit', amount: '620.00', date: '2026-08-16', narration: 'SWIGGY E COM' });
+    expect(a!.account_hint).toBe('HDFC Bank Credit Card XX6042');
+  });
   it('reads an ICICI card spend and ignores the available limit', () => {
     const a = parseAlert(mail('ICICI Bank <credit_cards@icicibank.com>', 'Transaction alert for your ICICI Bank Credit Card', 'Your ICICI Bank Credit Card XX5678 has been used for a transaction of INR 1,299.00 on Aug 12, 2026 at 10:15:30 IST at AMAZON PAY INDIA. The available credit limit on your card is INR 2,50,000.00.'));
     expect(a).toMatchObject({ amount: '1,299.00', direction: 'debit', account_kind: 'credit_card', date: '2026-08-12' });

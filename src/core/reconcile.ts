@@ -134,6 +134,21 @@ export async function reconcile(
   return result;
 }
 
+/** Narrations that carry no counterparty — a parser slip or the model's generic fallback. */
+export function isJunkNarration(n: string): boolean {
+  const s = n.trim();
+  if (s.length < 3) return true;
+  return /^(inform you|.*\bthat rs\b|.*credit card transaction$|.*bank transaction$|sbi ?!|dear|greetings|transaction alert|payment alert|upi transfer|transaction$)/i.test(s);
+}
+
+/** "URBAN COMPANY LIMITED" ~ "URBANCOMPANY": one contains the other once spaces/punctuation are gone. */
+export function similarNarration(a: string, b: string): boolean {
+  const na = normalizeNarration(a).replace(/\s+/g, '');
+  const nb = normalizeNarration(b).replace(/\s+/g, '');
+  if (na.length < 4 || nb.length < 4) return false;
+  return na.includes(nb) || nb.includes(na) || na.slice(0, 8) === nb.slice(0, 8);
+}
+
 /**
  * One-off cleanup for ledgers built before alert dedup existed: among alert
  * rows on the same account with the same amount/direction within a day, keep
@@ -154,12 +169,12 @@ export async function dedupeAlerts(): Promise<number> {
       if (!sameAcc) continue;
       const ra = a.ref_no.replace(/\s+/g, '').toUpperCase();
       const rb = b.ref_no.replace(/\s+/g, '').toUpperCase();
-      if (ra && rb && ra !== rb) continue;
+      if (ra && rb && ra !== rb && !similarNarration(a.narration, b.narration)) continue;
       // keep the row with a reference; fold the other's better narration into it
       const [keep, drop] = ra || !rb ? [a, b] : [b, a];
       const patch: Partial<Transaction> = {};
       if (!keep.ref_no && drop.ref_no) patch.ref_no = drop.ref_no;
-      if (drop.narration.length > keep.narration.length) patch.narration = drop.narration;
+      if ((isJunkNarration(keep.narration) && !isJunkNarration(drop.narration)) || (drop.narration.length > keep.narration.length && !isJunkNarration(drop.narration))) patch.narration = drop.narration;
       if (!keep.category && drop.category) Object.assign(patch, { category: drop.category, merchant: drop.merchant, categorized_by: drop.categorized_by });
       if (Object.keys(patch).length) db.update(db.transactions, keep.id, patch);
       db.update(db.transactions, drop.id, { status: 'superseded' });
@@ -188,12 +203,22 @@ export function recordAlert(
     narration: alert.narration,
   });
   const id = `t_${fingerprint.slice(0, 20)}`;
-  if (db.transactions.has(id) || pendingBatch.some((p) => p.id === id)) return 'duplicate';
+  const exact = db.transactions.get(id);
+  if (exact) {
+    // Re-reading mail with a better parser: repair a junk narration on the existing row and let it be re-categorized.
+    if (exact.categorized_by !== 'user' && isJunkNarration(exact.narration) && !isJunkNarration(alert.narration)) {
+      db.update(db.transactions, exact.id, { narration: alert.narration, merchant: '', category: '', categorized_by: '' });
+    }
+    return 'duplicate';
+  }
+  if (pendingBatch.some((p) => p.id === id)) return 'duplicate';
 
-  // Banks often send two mails for one transaction (a UPI alert with the
-  // reference, then a generic "your account was debited" without it). Same
-  // account, amount, direction within a day is the same transaction unless
-  // both carry different reference numbers.
+  // Banks (and the apps in front of them) often send two mails for one
+  // transaction: a UPI alert with the reference, then a generic "your account
+  // was debited" without it — or the same payment with two different
+  // reference systems. Same account, amount, direction within a day is the
+  // same transaction unless both carry different references AND the
+  // narrations look unrelated.
   const inst = instKey(alert.accountHint);
   const sameAccount = (r: Transaction) => (accountId ? r.account_id === accountId : !r.account_id && instKey(r.account_hint) === inst);
   const twins = [...db.liveTransactions(), ...pendingBatch].filter(
@@ -202,10 +227,13 @@ export function recordAlert(
   const newRef = alert.refNo?.replace(/\s+/g, '').toUpperCase() ?? '';
   for (const t of twins) {
     const oldRef = t.ref_no.replace(/\s+/g, '').toUpperCase();
-    if (oldRef && newRef && oldRef !== newRef) continue; // two distinct references: genuinely two transactions
-    if (!oldRef && newRef && db.transactions.has(t.id)) {
-      // the earlier generic alert learns the reference (and a better narration) from this one
-      db.update(db.transactions, t.id, { ref_no: alert.refNo ?? '', narration: alert.narration.length > t.narration.length ? alert.narration : t.narration });
+    if (oldRef && newRef && oldRef !== newRef && !similarNarration(t.narration, alert.narration)) continue; // genuinely two transactions
+    if (db.transactions.has(t.id)) {
+      const patch: Partial<Transaction> = {};
+      if (!oldRef && newRef) patch.ref_no = alert.refNo ?? '';
+      if (isJunkNarration(t.narration) && !isJunkNarration(alert.narration)) Object.assign(patch, { narration: alert.narration, merchant: '', category: t.categorized_by === 'user' ? t.category : '', categorized_by: t.categorized_by === 'user' ? 'user' : '' });
+      else if (alert.narration.length > t.narration.length && !isJunkNarration(alert.narration) && t.categorized_by !== 'user') patch.narration = alert.narration;
+      if (Object.keys(patch).length) db.update(db.transactions, t.id, patch);
     }
     return 'duplicate';
   }
