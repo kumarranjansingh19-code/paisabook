@@ -28,9 +28,16 @@ export function looksFinancial(m: EmailMeta): boolean {
   return FIN_WORDS.test(text) && AMOUNT.test(text);
 }
 
-export function buildQuery(from: string, to: string): string {
+/**
+ * Server-side pre-filter: lets Gmail find money-related mail so we read a few
+ * hundred headers instead of every email in the period. "Broad" scans skip it.
+ */
+const FOCUSED_TERMS =
+  '(debited OR credited OR spent OR statement OR "e-statement" OR transaction OR txn OR "credit card" OR "debit card" OR UPI OR IMPS OR NEFT OR "amount due" OR "total due" OR "minimum due" OR "payment received" OR withdrawn OR deposited OR "Rs." OR INR OR "a/c")';
+
+export function buildQuery(from: string, to: string, broad = false): string {
   const extra = settings().gmailExtraQuery.trim();
-  return `after:${gmailDate(from)} before:${gmailDate(to, 1)} -in:spam -in:trash -category:social -category:forums${extra ? ` ${extra}` : ''}`;
+  return `after:${gmailDate(from)} before:${gmailDate(to, 1)} -in:spam -in:trash -category:social -category:forums${broad ? '' : ` ${FOCUSED_TERMS}`}${extra ? ` ${extra}` : ''}`;
 }
 
 export interface ScanProgress {
@@ -48,10 +55,10 @@ export interface ScanResult {
 }
 
 /** List → metadata → prefilter → full bodies for candidates not yet processed. */
-export async function scanMailbox(from: string, to: string, opts: { reprocess?: boolean; onProgress?: (p: ScanProgress) => void; signal?: AbortSignal } = {}): Promise<ScanResult> {
+export async function scanMailbox(from: string, to: string, opts: { reprocess?: boolean; broad?: boolean; onProgress?: (p: ScanProgress) => void; signal?: AbortSignal } = {}): Promise<ScanResult> {
   const p = opts.onProgress ?? (() => {});
   p({ phase: 'Listing mail', done: 0, total: 0 });
-  const ids = await listMessageIds(buildQuery(from, to), 8000, opts.signal);
+  const ids = await listMessageIds(buildQuery(from, to, opts.broad), 8000, opts.signal);
   const fresh = opts.reprocess ? ids : ids.filter((id) => !db.emails.has(id));
   p({ phase: 'Reading headers', done: 0, total: fresh.length, note: `${ids.length} emails in range, ${ids.length - fresh.length} already processed` });
   const metas = await fetchMetas(fresh, (n) => p({ phase: 'Reading headers', done: n, total: fresh.length }), opts.signal);

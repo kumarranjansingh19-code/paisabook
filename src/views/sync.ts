@@ -35,8 +35,9 @@ export const syncView: View = {
       run: () => {
         const reprocess = root.querySelector<HTMLInputElement>('input[name=reprocess]')!.checked;
         const force = root.querySelector<HTMLInputElement>('input[name=force]')!.checked;
+        const broad = root.querySelector<HTMLInputElement>('input[name=broad]')!.checked;
         if (period.from > period.to) return toast('"From" must be before "To"', 'error');
-        void runSync({ from: period.from, to: period.to, reprocess, forceStatements: force });
+        void runSync({ from: period.from, to: period.to, reprocess, broad, forceStatements: force });
       },
       stop: () => abortSync(),
       categorize: async (el) => {
@@ -79,6 +80,7 @@ function page(): string {
       </div>
       <label class="check"><input type="checkbox" name="reprocess" /> Re-read emails already processed in this period (after adding accounts, or to fix misses)</label>
       <label class="check"><input type="checkbox" name="force" /> Re-import statements already imported (replaces their rows)</label>
+      <label class="check"><input type="checkbox" name="broad" /> Broad scan: read every email's headers instead of Gmail's money-related search (slower, catches odd senders)</label>
       <div id="status">${raw(status())}</div>
     </div>
     <div class="card">

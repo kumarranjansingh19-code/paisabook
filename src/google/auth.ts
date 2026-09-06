@@ -93,34 +93,59 @@ export class ApiError extends Error {
   }
 }
 
-/** Authenticated fetch with retry on 429/5xx. Throws AuthRequiredError on 401. */
-export async function gfetch<T>(url: string, init: RequestInit = {}, retries = 3): Promise<T> {
+const REQUEST_TIMEOUT_MS = 45_000;
+
+/** Combine the caller's signal with a per-request timeout so a hung request can never stall a sync. */
+export function withTimeout(signal?: AbortSignal | null, ms = REQUEST_TIMEOUT_MS): AbortSignal {
+  const timeout = AbortSignal.timeout(ms);
+  if (!signal) return timeout;
+  if (typeof AbortSignal.any === 'function') return AbortSignal.any([signal, timeout]);
+  return signal;
+}
+
+function extractMessage(body: string): string | undefined {
+  try {
+    return (JSON.parse(body) as { error?: { message?: string } })?.error?.message;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Authenticated raw fetch with retry on 429/5xx (honours Retry-After). Throws AuthRequiredError on 401. */
+export async function gfetchRaw(url: string, init: RequestInit = {}, retries = 5): Promise<Response> {
+  const givenHeaders = (init.headers ?? {}) as Record<string, string>;
   for (let attempt = 0; ; attempt++) {
     const res = await fetch(url, {
       ...init,
-      headers: { Authorization: `Bearer ${accessToken()}`, ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...(init.headers ?? {}) },
+      signal: withTimeout(init.signal),
+      headers: { Authorization: `Bearer ${accessToken()}`, ...(init.body && !givenHeaders['Content-Type'] ? { 'Content-Type': 'application/json' } : {}), ...givenHeaders },
     });
     if (res.status === 401) {
       setToken(null);
       throw new AuthRequiredError();
     }
-    if ((res.status === 429 || res.status >= 500) && attempt < retries) {
-      await new Promise((r) => setTimeout(r, 1500 * 2 ** attempt));
+    if ((res.status === 429 || res.status === 403 || res.status >= 500) && attempt < retries) {
+      const body = await res.text().catch(() => '');
+      // 403 is only retryable when it's a rate limit, not a scope/permission problem.
+      if (res.status === 403 && !/rate ?limit|quota|usageLimits/i.test(body)) throw new ApiError(403, extractMessage(body) ?? '403 Forbidden', body);
+      const retryAfter = Number(res.headers.get('Retry-After')) || 0;
+      const wait = retryAfter ? retryAfter * 1000 : 1000 * 2 ** attempt + Math.random() * 500;
+      await new Promise((r) => setTimeout(r, Math.min(wait, 30_000)));
       continue;
     }
     if (!res.ok) {
-      let body: unknown = await res.text();
-      try {
-        body = JSON.parse(body as string);
-      } catch {
-        /* text */
-      }
-      const msg = (body as { error?: { message?: string } })?.error?.message ?? `${res.status} ${res.statusText}`;
-      throw new ApiError(res.status, msg, body);
+      const body = await res.text();
+      throw new ApiError(res.status, extractMessage(body) ?? `${res.status} ${res.statusText}`, body);
     }
-    if (res.status === 204) return undefined as T;
-    return (await res.json()) as T;
+    return res;
   }
+}
+
+/** Authenticated JSON fetch. */
+export async function gfetch<T>(url: string, init: RequestInit = {}, retries = 5): Promise<T> {
+  const res = await gfetchRaw(url, init, retries);
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
 }
 
 export async function whoAmI(): Promise<{ email: string }> {
