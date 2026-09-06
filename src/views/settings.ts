@@ -18,7 +18,18 @@ export const moreView: View = {
         <a class="list-item" href="#/settings"><div class="grow"><div class="title">Settings</div><div class="sub">Keys, models, family, sheet, sign-out</div></div>›</a>
         ${db.loaded ? raw(`<a class="list-item" href="${db.sheetUrl()}" target="_blank" rel="noopener"><div class="grow"><div class="title">Open the Google Sheet ↗</div><div class="sub">Your data, in your Drive</div></div></a>`) : ''}
       </div>
-      <p class="muted small center">PaisaBook · open source · <a href="https://github.com/kumarranjansingh19-code/paisabook" target="_blank" rel="noopener">source</a> · build ${__BUILD__}</p>`;
+      <p class="muted small center">PaisaBook · open source · <a href="https://github.com/kumarranjansingh19-code/paisabook" target="_blank" rel="noopener">source</a> · build ${__BUILD__}</p>
+      <p class="center"><button class="btn small" data-action="update">Check for updates</button> <button class="btn small ghost" data-action="hard-refresh">Clear cache & reload</button></p>`;
+    onAction(root, {
+      update: async () => {
+        const reg = await navigator.serviceWorker?.getRegistration();
+        if (!reg) return toast('No service worker (dev mode)');
+        await reg.update();
+        if (reg.installing || reg.waiting) toast('Update found — it will reload in a moment', 'ok');
+        else toast('Already on the latest build', 'ok');
+      },
+      'hard-refresh': () => (window as unknown as { paisabookClearCaches: () => Promise<void> }).paisabookClearCaches(),
+    });
   },
 };
 
