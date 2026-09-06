@@ -359,3 +359,9 @@ select.inline:focus { box-shadow: none; border-color: var(--md-primary); }
 .stat .sub .pill { white-space: nowrap; height: 22px; line-height: 22px; padding: 0 8px; font-size: .75rem; }
 .month-nav .btn[data-action="refresh"] { width: auto; padding: 0 14px 0 10px; gap: 6px; border-radius: 20px; margin-left: 4px; }
 .month-nav .btn[data-action="refresh"] .spinner { width: 16px; height: 16px; border-width: 2px; }
+details.card > summary { font-size: 1.0625rem; font-weight: 700; padding: 2px 0; }
+details > summary { list-style: none; display: flex; align-items: center; gap: 6px; }
+details > summary::-webkit-details-marker { display: none; }
+details > summary::before { content: ''; width: 0; height: 0; border-left: 6px solid currentColor; border-top: 5px solid transparent; border-bottom: 5px solid transparent; transition: transform .15s; opacity: .7; }
+details[open] > summary::before { transform: rotate(90deg); }
+details > *:not(summary) { margin-top: 8px; }

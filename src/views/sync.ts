@@ -23,9 +23,17 @@ export const syncView: View = {
       const t = e.target as HTMLInputElement;
       if (t.name === 'from') period.from = t.value;
       if (t.name === 'to') period.to = t.value;
-      if (t.name === 'preset' && t.value) {
-        period = t.value === 'all' ? { from: daysAgoIso(365 * 3), to: todayIso() } : defaultPeriod(Number(t.value));
-        draw();
+      if (t.name === 'preset') {
+        if (t.value === 'custom') {
+          root.querySelector('#custom-range')?.removeAttribute('hidden');
+        } else {
+          period = t.value === 'all' ? { from: daysAgoIso(365 * 3), to: todayIso() } : defaultPeriod(Number(t.value));
+          root.querySelector('#custom-range')?.setAttribute('hidden', '');
+          root.querySelector<HTMLInputElement>('input[name=from]')!.value = period.from;
+          root.querySelector<HTMLInputElement>('input[name=to]')!.value = period.to;
+          const btn = root.querySelector('[data-action=run]');
+          if (btn) btn.textContent = resumeLabel();
+        }
       }
       if (t.name === 'pdf' && t.files?.length) {
         for (const f of [...t.files]) await queueLocalPdf(f);
@@ -35,10 +43,16 @@ export const syncView: View = {
       }
     });
     onAction(root, {
+      refresh: () => {
+        const lastTo = db.getSetting('last_sync_to');
+        const from = lastTo ? shiftDays(lastTo, -2) : daysAgoIso(30);
+        const senders = learnedSenders();
+        void runSync({ from, to: todayIso(), senders: senders.length >= 3 ? senders : undefined });
+      },
       run: () => {
-        const reprocess = root.querySelector<HTMLInputElement>('input[name=reprocess]')!.checked;
-        const force = root.querySelector<HTMLInputElement>('input[name=force]')!.checked;
-        const scope = root.querySelector<HTMLSelectElement>('select[name=scope]')!.value;
+        const reprocess = root.querySelector<HTMLInputElement>('input[name=reprocess]')?.checked ?? false;
+        const force = root.querySelector<HTMLInputElement>('input[name=force]')?.checked ?? false;
+        const scope = root.querySelector<HTMLSelectElement>('select[name=scope]')?.value ?? 'focused';
         if (period.from > period.to) return toast('"From" must be before "To"', 'error');
         void runSync({ from: period.from, to: period.to, reprocess, broad: scope === 'broad', senders: scope === 'known' ? learnedSenders() : undefined, forceStatements: force });
       },
@@ -63,11 +77,11 @@ export const syncView: View = {
       drop: (el) => dropPdf(el.dataset.sha!),
     });
     const off1 = onSync(() => {
-      // keep the inputs, refresh only the dynamic parts
       const s = root.querySelector('#status');
       if (s) s.innerHTML = status();
       const q = root.querySelector('#queue');
       if (q) q.innerHTML = queue();
+      root.querySelectorAll<HTMLButtonElement>('[data-action=refresh],[data-action=run],[data-action=fetch-statements]').forEach((b) => (syncState.running ? b.setAttribute('disabled', '') : b.removeAttribute('disabled')));
     });
     const off2 = db.onChange(() => {
       const q = root.querySelector('#queue');
@@ -80,42 +94,70 @@ export const syncView: View = {
   },
 };
 
+function shiftDays(iso: string, days: number): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 function page(): string {
   const last = db.getSetting('last_sync');
+  const lastTo = db.getSetting('last_sync_to');
+  const known = learnedSenders().length;
+  const busy = syncState.running;
   return html`
     <div class="card">
-      <h2>Sync from Gmail</h2>
-      <p class="muted small">${last ? `Last sync ${new Date(last).toLocaleString('en-IN')}.` : 'Never synced.'} Already-processed emails and statements are skipped, so re-running a period is cheap.</p>
-      <div class="row">
-        <label class="field grow">Quick pick <select name="preset"><option value="">custom</option><option value="1">last month</option><option value="3" selected>last 3 months</option><option value="6">last 6 months</option><option value="12">last year</option><option value="all">everything (3 yrs)</option></select></label>
+      <h2>Refresh</h2>
+      <p class="muted small">${last ? `Mail is fetched up to <strong>${lastTo}</strong> (last run ${new Date(last).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}).` : 'Nothing fetched yet.'}
+        Reads new mail from your banks since then and updates the ledger. ${known >= 3 ? `Only your ${known} known bank senders are read, so this takes seconds.` : ''}</p>
+      <button class="btn primary" data-action="refresh" ${busy ? 'disabled' : ''}>Refresh now</button>
+    </div>
+
+    <div class="card">
+      <h2>Load history</h2>
+      <p class="muted small">Pull a longer period, e.g. when you first set up or after adding an account. Mail already processed is skipped, so repeating a period is cheap.</p>
+      <label class="field">Period
+        <select name="preset">
+          <option value="1">Last month</option>
+          <option value="3" selected>Last 3 months</option>
+          <option value="6">Last 6 months</option>
+          <option value="12">Last year</option>
+          <option value="all">Everything (3 years)</option>
+          <option value="custom">Custom dates…</option>
+        </select>
+      </label>
+      <div id="custom-range" class="row" hidden>
         <label class="field grow">From <input type="date" name="from" value="${period.from}" /></label>
         <label class="field grow">To <input type="date" name="to" value="${period.to}" /></label>
       </div>
-      <label class="check"><input type="checkbox" name="reprocess" /> Re-read emails already processed in this period (after adding accounts, or to fix misses)</label>
-      <label class="check"><input type="checkbox" name="force" /> Re-import statements already imported (replaces their rows)</label>
-      <label class="field">What to read
-        <select name="scope">
-          <option value="known" ${learnedSenders().length >= 3 ? 'selected' : 'disabled'}>Known bank senders only — fastest (${learnedSenders().length} senders learned so far)</option>
-          <option value="focused" ${learnedSenders().length < 3 ? 'selected' : ''}>Money-related search — finds new senders (default for the first syncs)</option>
-          <option value="broad">Every email — slowest, catches odd senders</option>
-        </select>
-      </label>
+      <details>
+        <summary>Advanced</summary>
+        <label class="field">What to read
+          <select name="scope">
+            <option value="focused" ${known < 3 ? 'selected' : ''}>Money-related mail (default — also finds new bank senders)</option>
+            <option value="known" ${known >= 3 ? 'selected' : 'disabled'}>Only my ${known} known bank senders (fastest)</option>
+            <option value="broad">Every email (slowest, catches odd senders)</option>
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" name="reprocess" /> <span>Re-read mail already processed in this period (after adding an account, or to fix misses)</span></label>
+        <label class="check"><input type="checkbox" name="force" /> <span>Re-import statements already imported (replaces their rows)</span></label>
+        <p class="small muted">Statements only: <button class="btn small" data-action="fetch-statements" ${busy ? 'disabled' : ''}>Find statement emails in this period</button> — a few quota units, no alert reading.</p>
+      </details>
       <div id="status">${raw(status())}</div>
     </div>
+
     <div class="card">
-      <div class="row between"><h3>Statement PDFs</h3><button class="btn small" data-action="fetch-statements" ${syncState.running ? 'disabled' : ''}>Fetch statements only</button></div>
-      <p class="muted small">Cheap alternative to a full sync: finds just the statement emails in the period above, queues their PDFs, and imports the ones your saved passwords open. Ones that need a password wait here and are imported the moment you add it. You can also pick PDFs from your device.</p>
+      <h3>Statement PDFs</h3>
+      <p class="muted small">Statements found in mail land here. Ones that need a password wait and are imported the moment you add it (key button on the account). You can also pick a PDF from this device.</p>
       <label class="field">Import a PDF from this device <input type="file" name="pdf" accept="application/pdf,.pdf" multiple /></label>
       <div id="queue">${raw(queue())}</div>
     </div>
-    <div class="card">
-      <div class="row between"><h3>Merge duplicate alerts</h3><button class="btn" data-action="dedupe">Run now</button></div>
-      <p class="muted small">Banks often mail twice about one transaction (with and without the reference number). New syncs merge these automatically; run this once for rows imported earlier.</p>
-    </div>
-    <div class="card">
-      <div class="row between"><h3>Categorize</h3><button class="btn" data-action="categorize">Run now</button></div>
-      <p class="muted small">Runs at the end of every sync; use this after editing rules. ${db.liveTransactions().filter((t) => !t.category && t.status !== 'unmatched').length} uncategorized right now.</p>
-    </div>`;
+
+    <details class="card">
+      <summary>Maintenance</summary>
+      <div class="list-item"><div class="grow"><div class="title">Merge duplicate alerts</div><div class="sub">Banks often mail twice about one transaction. New syncs merge these automatically; run once for older rows.</div></div><button class="btn small" data-action="dedupe">Run</button></div>
+      <div class="list-item"><div class="grow"><div class="title">Categorize</div><div class="sub">Runs after every sync; use after editing rules. ${db.liveTransactions().filter((t) => !t.category && t.status !== 'unmatched').length} uncategorized now.</div></div><button class="btn small" data-action="categorize">Run</button></div>
+    </details>`;
 }
 
 function status(): string {
@@ -132,16 +174,16 @@ function status(): string {
     ${bar}
     ${summary ? `<p>${summary}</p>` : ''}
     ${s.error ? `<p class="pill bad">${escapeHtml(s.error)}</p>` : ''}
-    ${s.log.length ? `<div class="log">${s.log.map(escapeHtml).join('\n')}</div>` : ''}
+    ${s.log.length ? `<details ${s.running || s.error ? 'open' : ''}><summary class="small">Log</summary><div class="log">${s.log.map(escapeHtml).join('\n')}</div></details>` : ''}
     ${usage.calls ? `<p class="muted small">AI usage this session: ${usage.calls} calls · ${Math.round(usage.inputTokens / 1000)}k in / ${Math.round(usage.outputTokens / 1000)}k out tokens</p>` : ''}`;
 }
 
 function resumeLabel(): string {
   const ck = scanCheckpoint();
   if (ck && ck.from === period.from && ck.to === period.to && ck.metas.length && ck.metas.length < ck.ids.length) {
-    return `Resume sync (${ck.metas.length}/${ck.ids.length} headers read)`;
+    return `Resume (${ck.metas.length}/${ck.ids.length} read)`;
   }
-  return `Sync ${period.from} → ${period.to}`;
+  return `Load ${period.from} → ${period.to}`;
 }
 
 function queue(): string {
