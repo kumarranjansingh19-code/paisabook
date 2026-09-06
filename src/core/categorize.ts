@@ -86,6 +86,29 @@ export function pairOwnTransfers(): number {
   return n;
 }
 
+/**
+ * Debits whose narration names a family member (every word of the name, or a
+ * single distinctive word) are family transfers. Runs when a member is added —
+ * so existing rows get re-tagged at once — and on every categorize pass.
+ */
+export function tagFamilyTransfers(): number {
+  const names = db.family.rows
+    .filter((f) => f.relation !== 'self' && f.name.trim())
+    .map((f) => f.name.toLowerCase().split(/\s+/).filter((w) => w.length >= 3))
+    .filter((ts) => ts.length >= 2 || (ts.length === 1 && ts[0]!.length >= 5));
+  if (!names.length) return 0;
+  let n = 0;
+  for (const t of db.liveTransactions()) {
+    if (t.direction !== 'debit' || t.categorized_by === 'user' || t.category === 'family_transfer') continue;
+    const narr = ` ${t.narration.toLowerCase().replace(/[^a-z0-9]+/g, ' ')} `;
+    const hit = names.some((ts) => (ts.length === 1 ? narr.includes(` ${ts[0]} `) : ts.every((w) => narr.includes(w))));
+    if (!hit) continue;
+    db.update(db.transactions, t.id, { category: 'family_transfer', categorized_by: 'rule' });
+    n++;
+  }
+  return n;
+}
+
 /** Memory for the LLM prompt: user corrections are authoritative, history is guidance. */
 export function buildMemory(): string {
   const live = db.liveTransactions();
@@ -146,7 +169,7 @@ export interface CategorizeProgress {
 
 /** Categorize uncategorized live transactions: rules, then LLM in batches. */
 export async function categorizeAll(onProgress?: CategorizeProgress, signal?: AbortSignal): Promise<{ byRule: number; byLlm: number }> {
-  const byRule = applyRules() + pairOwnTransfers();
+  const byRule = applyRules() + pairOwnTransfers() + tagFamilyTransfers();
   await db.flush();
   const todo = db.liveTransactions().filter((t) => !t.category && t.status !== 'unmatched');
   let byLlm = 0;

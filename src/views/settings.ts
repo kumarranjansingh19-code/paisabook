@@ -1,4 +1,5 @@
 import type { View } from '../app/router';
+import { pairOwnTransfers, tagFamilyTransfers } from '../core/categorize';
 import { html, raw, onAction, toast, modal, confirmDialog, downloadText, spinner, deferWhileTyping } from '../app/ui';
 import { db, newId, stamp, type Category } from '../store/db';
 import { addCategory, categories } from '../core/categories';
@@ -86,6 +87,11 @@ export const settingsView: View = {
         );
         if (!r?.name) return;
         await db.append(db.family, [{ id: newId('fam'), name: r.name, relation: r.relation ?? 'other', created_at: stamp() }]);
+        const retagged = r.relation === 'self' ? pairOwnTransfers() : tagFamilyTransfers();
+        if (retagged) {
+          await db.flush();
+          toast(`${retagged} existing transaction${retagged > 1 ? 's' : ''} re-tagged as ${r.relation === 'self' ? 'self transfer' : 'family transfer'}`, 'ok');
+        }
         draw();
       },
       'del-family': async (el) => {
@@ -175,7 +181,7 @@ function page(): string {
     </div>
     <div class="card">
       <div class="row between"><h3>Family</h3><md-outlined-button data-small data-action="add-family">+ Add</md-outlined-button></div>
-      <p class="small muted">Names help the AI tag transfers to family as <em>family transfer</em> instead of spending.</p>
+      <p class="small muted">Payments naming a family member are tagged <em>family transfer</em> instead of spending — existing rows are re-tagged the moment you add someone. Add yourself as <em>self</em> so moves between your own accounts are never counted as income.</p>
       ${db.family.rows.length ? raw(db.family.rows.map((f) => `<div class="list-item"><div class="grow">${escapeHtml(f.name)} <span class="muted small">${escapeHtml(f.relation)}</span></div><md-text-button data-small data-action="del-family" data-id="${f.id}">✕</md-text-button></div>`).join('')) : ''}
     </div>
     <div class="card">
