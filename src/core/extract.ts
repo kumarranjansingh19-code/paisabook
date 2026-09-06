@@ -451,7 +451,7 @@ export async function processEmails(emails: FetchedEmail[], opts: { onProgress?:
         if (fresh.length) {
           let results: EmailBatchResult['results'] = [];
           try {
-            const r = await generateJson<EmailBatchResult>(emailBatchSchema, PROMPT + listing(fresh.map((f) => f.e), chars), { tier, signal: poolSignal });
+            const r = await generateJson<EmailBatchResult>(emailBatchSchema, PROMPT + listing(fresh.map((f) => f.e), chars), { tier, signal: poolSignal, label: tier === 'reasoning' ? 'second-look' : 'alerts' });
             results = r.results;
           } catch (err) {
             if (poolSignal.aborted) throw err;

@@ -9,8 +9,9 @@ import { categorizeAll } from './categorize';
 import { fetchStatementMails, processEmails, scanMailbox, type ScanProgress } from './extract';
 import { importStatement, type ImportOutcome, type PendingPdf } from './statements';
 import { autoCreateFromUnmatched, rehomeUnmatched } from './accounts';
+import { matchAlertsToStatements } from './reconcile';
 import { daysAgoIso, todayIso } from './dates';
-import { usage } from '../llm/gemini';
+import { usage, usageSnapshot, usageSummary } from '../llm/gemini';
 import { mapPool } from './pool';
 import { gmailPace, type FetchedEmail } from '../google/gmail';
 
@@ -81,6 +82,7 @@ export async function runSync(opts: SyncOptions): Promise<void> {
   controller = new AbortController();
   const signal = controller.signal;
   Object.assign(syncState, { running: true, phase: 'starting', progress: null, log: [], error: null, summary: {}, startedAt: Date.now(), llmCallsAtStart: usage.calls });
+  const usageAtStart = usageSnapshot();
   emit();
   const onProgress = (p: ScanProgress) => {
     syncState.progress = p;
@@ -120,9 +122,14 @@ export async function runSync(opts: SyncOptions): Promise<void> {
       for (const p of proc.pdfs) if (!known.has(p.sha)) syncState.pendingPdfs.push(p);
     }
 
-    await importPending({ force: opts.forceStatements, signal });
+    // Accounts first, statements second: a statement imported before its alerts have a home can't absorb them.
     const created = await autoCreateFromUnmatched();
     if (created.length) log(`Accounts created from repeated alerts: ${created.map((a) => a.display_name).join(', ')}`);
+    await importPending({ force: opts.forceStatements, signal });
+    const createdLate = await autoCreateFromUnmatched();
+    if (createdLate.length) log(`Accounts created from repeated alerts: ${createdLate.map((a) => a.display_name).join(', ')}`);
+    const paired = await matchAlertsToStatements();
+    if (paired) log(`${paired} alerts matched to statement rows`);
 
     if (!opts.skipCategorize) {
       syncState.phase = 'Categorizing';
@@ -135,7 +142,7 @@ export async function runSync(opts: SyncOptions): Promise<void> {
     await db.setSetting('last_sync', new Date().toISOString());
     await db.setSetting('last_sync_to', opts.to);
     syncState.phase = scan.interrupted ? 'partial' : 'done';
-    log(`${scan.interrupted ? 'Partial run finished' : 'Done'} in ${Math.round((Date.now() - syncState.startedAt) / 1000)}s using ${usage.calls - syncState.llmCallsAtStart} AI calls · Gmail pace now ${gmailPace()} reads/s`);
+    log(`${scan.interrupted ? 'Partial run finished' : 'Done'} in ${Math.round((Date.now() - syncState.startedAt) / 1000)}s · AI calls: ${usage.calls - syncState.llmCallsAtStart} (${usageSummary(usageAtStart) || 'none'}) · Gmail pace ${gmailPace()} reads/s`);
   } catch (err) {
     if ((err as Error).name === 'AbortError') {
       syncState.phase = 'stopped';
@@ -314,6 +321,8 @@ export async function fetchStatements(from: string, to: string): Promise<void> {
     await importPending({ signal });
     const rehomed = await rehomeUnmatched();
     if (rehomed) log(`${rehomed} alerts attached to accounts learned from statements`);
+    const paired = await matchAlertsToStatements();
+    if (paired) log(`${paired} alerts matched to statement rows`);
     if (syncState.pendingPdfs.length) log(`${syncState.pendingPdfs.length} PDF${syncState.pendingPdfs.length > 1 ? 's' : ''} still waiting for a password or an account (see below)`);
     await categorizeAll(undefined, signal).catch((err) => log(`categorize: ${String((err as Error).message)}`));
     syncState.phase = 'done';
@@ -360,7 +369,10 @@ export async function importWithNewPassword(): Promise<{ imported: number; remai
   if (!before) return { imported: 0, remaining: 0 };
   await importPending();
   const remaining = syncState.pendingPdfs.length;
-  if (before - remaining > 0) await categorizeAll().catch(() => {});
+  if (before - remaining > 0) {
+    await matchAlertsToStatements();
+    await categorizeAll().catch(() => {});
+  }
   db.notify();
   return { imported: before - remaining, remaining };
 }

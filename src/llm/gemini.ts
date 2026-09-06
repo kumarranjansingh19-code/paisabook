@@ -24,8 +24,11 @@ export interface LlmUsage {
   calls: number;
   inputTokens: number;
   outputTokens: number;
+  /** per step: alerts, second-look, statement, categorize, discovery, sheet… */
+  byLabel: Record<string, { calls: number; inputTokens: number; outputTokens: number }>;
 }
-export const usage: LlmUsage = { calls: 0, inputTokens: 0, outputTokens: 0 };
+export const usage: LlmUsage = { calls: 0, inputTokens: 0, outputTokens: 0, byLabel: {} };
+let currentLabel = 'other';
 
 function model(tier: LlmTier): string {
   const s = settings();
@@ -38,6 +41,19 @@ interface GenerateOpts {
   thinking?: 'low' | 'high';
   maxRetries?: number;
   signal?: AbortSignal;
+  /** which step this call belongs to, for the usage breakdown */
+  label?: string;
+}
+
+/** Human-readable usage summary, e.g. "alerts 24 · statement 12 · categorize 6". */
+export function usageSummary(since?: Record<string, { calls: number }>): string {
+  return Object.entries(usage.byLabel)
+    .map(([k, v]) => `${k} ${v.calls - (since?.[k]?.calls ?? 0)}`)
+    .filter((s) => !/ 0$/.test(s))
+    .join(' · ');
+}
+export function usageSnapshot(): Record<string, { calls: number }> {
+  return Object.fromEntries(Object.entries(usage.byLabel).map(([k, v]) => [k, { calls: v.calls }]));
 }
 
 async function call(body: unknown, tier: LlmTier, signal?: AbortSignal): Promise<string> {
@@ -65,6 +81,10 @@ async function call(body: unknown, tier: LlmTier, signal?: AbortSignal): Promise
   usage.calls++;
   usage.inputTokens += json.usageMetadata?.promptTokenCount ?? 0;
   usage.outputTokens += json.usageMetadata?.candidatesTokenCount ?? 0;
+  const bl = (usage.byLabel[currentLabel] ??= { calls: 0, inputTokens: 0, outputTokens: 0 });
+  bl.calls++;
+  bl.inputTokens += json.usageMetadata?.promptTokenCount ?? 0;
+  bl.outputTokens += json.usageMetadata?.candidatesTokenCount ?? 0;
   const text = json.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('') ?? '';
   if (!text) throw new LlmError(`empty response (${json.candidates?.[0]?.finishReason ?? 'no candidates'})`);
   return text;
@@ -79,6 +99,7 @@ export async function generateJson<T>(schema: JsonSchema, prompt: string, opts: 
   let lastErr: unknown;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
+      currentLabel = opts.label ?? 'other';
       const text = await call(
         {
           contents: [{ role: 'user', parts: [{ text: prompt }] }],

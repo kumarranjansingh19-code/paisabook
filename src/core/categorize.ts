@@ -113,7 +113,7 @@ export async function categorizeAll(onProgress?: CategorizeProgress, signal?: Ab
         `${householdHints()}; paid_for_others for amounts paid on someone else's behalf, received_for_others for their repayment credits; ` +
         `salary_income for salary credits; dividend_income for dividend/SGB-interest credits; refund for merchant refunds/reversals; ` +
         `investment for transfers TO broker/MF/PPF/NPS and also for capital coming BACK from broker platforms (withdrawals, sale proceeds).\n\n${listing}`,
-      { tier: 'reasoning', signal },
+      { tier: 'reasoning', signal, label: 'categorize' },
     );
     const valid = new Set(batch.map((t) => t.id));
     for (const r of result.results) {
@@ -226,7 +226,7 @@ export async function suggestRules(): Promise<RuleSuggestion[]> {
     withCategoryEnum(ruleSuggestSchema),
     `From this merchant history, suggest categorization RULES — only where the mapping is unambiguous and the fragment is distinctive ` +
       `(a substring that could never appear in unrelated narrations). Skip merchants whose category legitimately varies by context.\n\n${lines.join('\n')}`,
-    { tier: 'reasoning' },
+    { tier: 'reasoning', label: 'rule-suggest' },
   );
   const out: RuleSuggestion[] = [];
   for (const s of r.suggestions) {

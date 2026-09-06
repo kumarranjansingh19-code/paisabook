@@ -7,7 +7,7 @@ import { daysAgoIso, todayIso } from '../core/dates';
 import { categorizeAll } from '../core/categorize';
 import { usage } from '../llm/gemini';
 import { learnedSenders, scanCheckpoint } from '../core/extract';
-import { dedupeAlerts } from '../core/reconcile';
+import { dedupeAlerts, matchAlertsToStatements } from '../core/reconcile';
 
 let period = defaultPeriod(3);
 
@@ -49,6 +49,10 @@ export const syncView: View = {
         const senders = learnedSenders();
         void runSync({ from, to: todayIso(), senders: senders.length >= 3 ? senders : undefined });
       },
+      start: () => {
+        if (period.from > period.to) return toast('"From" must be before "To"', 'error');
+        void runSync({ from: period.from, to: period.to });
+      },
       run: () => {
         const reprocess = root.querySelector<HTMLInputElement>('input[name=reprocess]')?.checked ?? false;
         const force = root.querySelector<HTMLInputElement>('input[name=force]')?.checked ?? false;
@@ -60,6 +64,12 @@ export const syncView: View = {
       'fetch-statements': () => {
         if (period.from > period.to) return toast('"From" must be before "To"', 'error');
         void fetchStatements(period.from, period.to);
+      },
+      match: async (el) => {
+        el.setAttribute('disabled', '');
+        const n = await matchAlertsToStatements();
+        toast(n ? `${n} alerts matched to statement rows` : 'Nothing to match', 'ok');
+        el.removeAttribute('disabled');
       },
       dedupe: async (el) => {
         el.setAttribute('disabled', '');
@@ -105,6 +115,28 @@ function page(): string {
   const lastTo = db.getSetting('last_sync_to');
   const known = learnedSenders().length;
   const busy = syncState.running;
+  if (!last) {
+    return html`
+      <div class="card">
+        <h2>Get started</h2>
+        <p class="muted small">PaisaBook will read the last 3 months of your bank mail: alerts, statements (asking for PDF passwords when needed) and card bills, then categorize everything. Takes a few minutes; you can leave and come back — progress is saved.</p>
+        <button class="btn primary" data-action="start" ${busy ? 'disabled' : ''}>Read my last 3 months</button>
+        <details style="margin-top:12px"><summary class="small">Choose a different period</summary>
+          <label class="field">Period <select name="preset"><option value="1">Last month</option><option value="3" selected>Last 3 months</option><option value="6">Last 6 months</option><option value="12">Last year</option><option value="custom">Custom dates…</option></select></label>
+          <div id="custom-range" class="row" hidden>
+            <label class="field grow">From <input type="date" name="from" value="${period.from}" /></label>
+            <label class="field grow">To <input type="date" name="to" value="${period.to}" /></label>
+          </div>
+        </details>
+        <div id="status">${raw(status())}</div>
+      </div>
+      <div class="card">
+        <h3>Statement PDFs</h3>
+        <p class="muted small">Statements found in mail land here. Ones that need a password wait and are imported the moment you add it (key button on the account).</p>
+        <label class="field">Import a PDF from this device <input type="file" name="pdf" accept="application/pdf,.pdf" multiple /></label>
+        <div id="queue">${raw(queue())}</div>
+      </div>`;
+  }
   return html`
     <div class="card">
       <h2>Refresh</h2>
@@ -155,6 +187,7 @@ function page(): string {
 
     <details class="card">
       <summary>Maintenance</summary>
+      <div class="list-item"><div class="grow"><div class="title">Match alerts to statements</div><div class="sub">Pairs alert rows with the statement rows for the same purchase and hides the alert. Runs after every sync; use it if you see both.</div></div><button class="btn small" data-action="match">Run</button></div>
       <div class="list-item"><div class="grow"><div class="title">Merge duplicate alerts</div><div class="sub">Banks often mail twice about one transaction. New syncs merge these automatically; run once for older rows.</div></div><button class="btn small" data-action="dedupe">Run</button></div>
       <div class="list-item"><div class="grow"><div class="title">Categorize</div><div class="sub">Runs after every sync; use after editing rules. ${db.liveTransactions().filter((t) => !t.category && t.status !== 'unmatched').length} uncategorized now.</div></div><button class="btn small" data-action="categorize">Run</button></div>
     </details>`;
@@ -169,7 +202,7 @@ function status(): string {
     .join(' ');
   return `
     <div class="row" style="margin:.6rem 0">
-      ${s.running ? `<button class="btn danger" data-action="stop">Stop</button><span class="spinner"></span> <span>${escapeHtml(s.phase)}${p && p.total ? ` ${p.done}/${p.total}` : ''}${p?.note ? ` · ${escapeHtml(p.note)}` : ''}</span>` : `<button class="btn primary" data-action="run">${resumeLabel()}</button>`}
+      ${s.running ? `<button class="btn danger" data-action="stop">Stop</button><span class="spinner"></span> <span>${escapeHtml(s.phase)}${p && p.total ? ` ${p.done}/${p.total}` : ''}${p?.note ? ` · ${escapeHtml(p.note)}` : ''}</span>` : db.getSetting('last_sync') ? `<button class="btn primary" data-action="run">${resumeLabel()}</button>` : ''}
     </div>
     ${bar}
     ${summary ? `<p>${summary}</p>` : ''}

@@ -118,8 +118,8 @@ export async function importStatement(
         '(statements print DD-MM-YYYY or DD/MM/YY) — never reuse the statement period dates for rows. ' +
         'Include EVERY posted row, including small fee, tax, GST, markup, interest and charge lines — they are transactions. ' +
         'Skip summary/total lines, opening balance and reward-point lines. If this document is not a bank/card statement (receipt, invoice, broker ledger, insurance) set statement_kind=not_a_statement.\n\n' +
-        redactPii(text).slice(0, 120_000),
-      { tier: 'reasoning', signal: opts.signal },
+        trimStatementText(redactPii(text)),
+      { tier: 'reasoning', signal: opts.signal, label: 'statement' },
     );
   } catch (err) {
     return { status: 'failed', reason: `AI extraction failed: ${String(err)}` };
@@ -215,6 +215,26 @@ export async function importStatement(
     await db.append(db.statements, [statement]);
   }
   return { status: 'imported', statement, inserted: result.inserted, matched: statement.matched, review: result.flaggedForReview, ...(createdAccount ? { createdAccount } : {}) };
+}
+
+/**
+ * Statements are mostly boilerplate (terms, offers, footers). Keep the header
+ * region and every line that looks like a transaction, a date or a total —
+ * typically a third of the text, and a third of the model cost.
+ */
+export function trimStatementText(text: string): string {
+  const lines = text.split('\n');
+  const keep: string[] = [];
+  const DATE = /\d{1,2}[-/ .][A-Za-z0-9]{2,3}[-/ .]\d{2,4}|\d{4}-\d{2}-\d{2}/;
+  const AMOUNT = /\d[\d,]*\.\d{2}\b/;
+  const KEY = /\b(total|due|balance|limit|period|statement|account|card|from|to|opening|closing|summary|credit|debit|payment|purchase|withdrawal|deposit|interest|charges|gst|markup|fee)\b/i;
+  lines.forEach((l, i) => {
+    const s = l.trim();
+    if (!s) return;
+    if (i < 60 || DATE.test(s) || AMOUNT.test(s) || (KEY.test(s) && s.length < 160)) keep.push(s);
+  });
+  const out = keep.join('\n');
+  return out.length > 4000 ? out.slice(0, 90_000) : text.slice(0, 90_000);
 }
 
 const BROKER_RE = /\b(zerodha|kite|coin|groww|upstox|angel ?one|indmoney|cdsl|nsdl|cams|kfintech|karvy|protean|nps|cra\b|demat|holding statement|consolidated account statement|mutual fund|folio|sip\b|ppf|epf|epfo|insurance|policy)\b/i;

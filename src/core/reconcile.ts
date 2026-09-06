@@ -134,6 +134,38 @@ export async function reconcile(
   return result;
 }
 
+/**
+ * Pair provisional alerts with confirmed statement rows that arrived without
+ * them (the account didn't exist yet when the statement was imported, or the
+ * alert came in later). Same account, amount, direction within ±2 days; each
+ * statement row absorbs at most one alert. The alert row is hidden and the
+ * statement row keeps the alert's reference/narration if it had none.
+ */
+export async function matchAlertsToStatements(): Promise<number> {
+  const live = db.liveTransactions();
+  const stmtRows = live.filter((t) => t.source === 'statement' && t.status === 'confirmed');
+  const used = new Set<string>();
+  let n = 0;
+  for (const a of live) {
+    if (a.source !== 'email_alert' || (a.status !== 'provisional' && a.status !== 'needs_review') || !a.account_id) continue;
+    const s = stmtRows.find(
+      (r) => !used.has(r.id) && r.account_id === a.account_id && r.amount_paise === a.amount_paise && r.direction === a.direction && Math.abs(daysBetween(r.posted_at, a.posted_at)) <= FUZZY_WINDOW_DAYS,
+    );
+    if (!s) continue;
+    used.add(s.id);
+    const patch: Partial<Transaction> = {};
+    if (!s.ref_no && a.ref_no) patch.ref_no = a.ref_no;
+    if (isJunkNarration(s.narration) && !isJunkNarration(a.narration)) patch.narration = a.narration;
+    if (!s.category && a.category) Object.assign(patch, { category: a.category, merchant: a.merchant, categorized_by: a.categorized_by });
+    if (a.categorized_by === 'user') Object.assign(patch, { category: a.category, merchant: a.merchant, categorized_by: 'user' });
+    if (Object.keys(patch).length) db.update(db.transactions, s.id, patch);
+    db.update(db.transactions, a.id, { status: 'superseded', statement_id: s.statement_id });
+    n++;
+  }
+  if (n) await db.flush();
+  return n;
+}
+
 /** Narrations that carry no counterparty — a parser slip or the model's generic fallback. */
 export function isJunkNarration(n: string): boolean {
   const s = n.trim();

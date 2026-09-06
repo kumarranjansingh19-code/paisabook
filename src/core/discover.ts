@@ -39,7 +39,7 @@ export async function discoverAccounts(emails: FetchedEmail[], signal?: AbortSig
             `(transaction alert, statement delivery, balance/bill notice). NOT account emails: marketing, offers, OTPs, ` +
             `brokers/demat/mutual funds (Zerodha, Groww, NSE, CDSL...), payment/rewards apps (CRED, Paytm, PhonePe...), ` +
             `insurers, and loan/EMI notices. The institution must be an actual bank or card issuer.\n\n${listing}`,
-          { tier: 'bulk', signal },
+          { tier: 'bulk', signal, label: 'discovery' },
         );
       } catch {
         return;

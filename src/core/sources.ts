@@ -29,7 +29,7 @@ export async function proposeMapping(rows: Cell[][]): Promise<SheetMapping> {
   return generateJson<SheetMapping>(
     sheetMappingSchema,
     `Here are the first rows of a spreadsheet tab (1-based row and column numbers). Work out how to read it as a list of money transactions.\n\n${listing}`,
-    { tier: 'reasoning' },
+    { tier: 'reasoning', label: 'sheet-mapping' },
   );
 }
 
@@ -104,7 +104,7 @@ export async function aiParseRows(rows: Array<{ rowNo: number; cells: Cell[] }>,
     const r = await generateJson<RowsExtract>(
       rowsExtractSchema,
       `Each line is a row from a personal money-tracking spreadsheet in India. Extract one transaction per row that describes money moving; skip headers, totals and blank rows. Dates are DD/MM unless clearly otherwise.\n\n${listing}`,
-      { tier: 'reasoning', signal },
+      { tier: 'reasoning', signal, label: 'sheet-rows' },
     );
     for (const t of r.transactions) {
       try {
