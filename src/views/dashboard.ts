@@ -1,9 +1,9 @@
 import type { View } from '../app/router';
-import { html, raw, money, onAction, catLabel, pct } from '../app/ui';
+import { html, raw, money, onAction, catLabel, pct, toast } from '../app/ui';
 import { db } from '../store/db';
 import { availableMonths, inMonth, monthlyCashflow, settlement, spendByAccount, spendByCategory, topMerchants, upcomingBills } from '../core/analytics';
-import { addMonths, monthLabel, monthOf, todayIso } from '../core/dates';
-import { loadPendingFromSheet, syncState } from '../core/sync';
+import { addMonths, daysAgoIso, monthLabel, monthOf, todayIso } from '../core/dates';
+import { loadPendingFromSheet, onSync, runSync, syncState } from '../core/sync';
 import { unmatchedHints } from '../core/accounts';
 
 let month = monthOf(todayIso());
@@ -31,10 +31,40 @@ export const dashboardView: View = {
       acc: (el) => {
         location.hash = `#/txns?m=${month}&acc=${encodeURIComponent(el.dataset.acc!)}`;
       },
+      refresh: () => {
+        if (syncState.running) return;
+        // Incremental: from two days before the last sync's end (overlap is free — processed mail is skipped) to today.
+        const lastTo = db.getSetting('last_sync_to');
+        const from = lastTo ? shiftDays(lastTo, -2) : daysAgoIso(30);
+        toast(lastTo ? `Fetching mail since ${from}…` : 'No previous sync — fetching the last 30 days…');
+        void runSync({ from, to: todayIso() });
+      },
     });
-    return db.onChange(draw);
+    const offSync = onSync(() => {
+      const line = root.querySelector('.month-nav');
+      if (line) draw();
+    });
+    const offDb = db.onChange(draw);
+    return () => {
+      offSync();
+      offDb();
+    };
   },
 };
+
+function lastSyncLine(): string {
+  const last = db.getSetting('last_sync');
+  if (!last) return '';
+  const mins = Math.round((Date.now() - Date.parse(last)) / 60000);
+  const ago = mins < 2 ? 'just now' : mins < 60 ? `${mins} min ago` : mins < 48 * 60 ? `${Math.round(mins / 60)} h ago` : `${Math.round(mins / 1440)} days ago`;
+  return `<p class="small muted">Mail fetched up to ${escape(db.getSetting('last_sync_to') || '—')} · last sync ${ago}</p>`;
+}
+
+function shiftDays(iso: string, days: number): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
 
 function page(): string {
   loadPendingFromSheet();
@@ -60,7 +90,9 @@ function page(): string {
       <button class="btn small" data-action="prev">‹</button>
       <h2>${monthLabel(month)}</h2>
       <button class="btn small" data-action="next" ${month >= monthOf(todayIso()) ? 'disabled' : ''}>›</button>
+      <button class="btn small ${syncState.running ? 'ghost' : 'primary'}" data-action="refresh" title="Fetch mail since the last sync" ${syncState.running ? 'disabled' : ''}>${syncState.running ? raw('<span class="spinner"></span>') : raw('<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 20q-3.35 0-5.675-2.325T4 12q0-3.35 2.325-5.675T12 4q1.725 0 3.3.713T18 6.75V4h2v7h-7V9h4.2q-.8-1.4-2.187-2.2T12 6Q9.5 6 7.75 7.75T6 12q0 2.5 1.75 4.25T12 18q1.925 0 3.475-1.1T17.65 14h2.1q-.7 2.65-2.85 4.325T12 20Z"/></svg>')} Refresh</button>
     </div>
+    ${syncState.running ? raw(`<p class="small muted">${escape(syncState.phase)}${syncState.progress?.total ? ` ${syncState.progress.done}/${syncState.progress.total}` : ''}${syncState.progress?.note ? ` · ${escape(syncState.progress.note)}` : ''} — <a href="#/sync">details</a></p>`) : lastSyncLine()}
     ${!months.includes(month) ? raw('<p class="muted center small">No transactions in this month yet.</p>') : ''}
     <div class="grid">
       <div class="stat"><div class="label">Real spend</div><div class="value">${money(spend, true)}</div>

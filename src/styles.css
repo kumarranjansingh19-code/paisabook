@@ -357,3 +357,5 @@ select.inline:focus { box-shadow: none; border-color: var(--md-primary); }
 /* status chips inside stat tiles wrap instead of spilling out */
 .stat .sub { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; line-height: 1.3; }
 .stat .sub .pill { white-space: nowrap; height: 22px; line-height: 22px; padding: 0 8px; font-size: .75rem; }
+.month-nav .btn[data-action="refresh"] { width: auto; padding: 0 14px 0 10px; gap: 6px; border-radius: 20px; margin-left: 4px; }
+.month-nav .btn[data-action="refresh"] .spinner { width: 16px; height: 16px; border-width: 2px; }
