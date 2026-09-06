@@ -307,7 +307,16 @@ export class SheetDb {
     });
   }
 
-  async append<T extends object>(t: Table<T>, records: T[]): Promise<void> {
+  private appendChain: Promise<void> = Promise.resolve();
+
+  /** Appends are serialized: two concurrent appends must not compute the same next row. */
+  append<T extends object>(t: Table<T>, records: T[]): Promise<void> {
+    const run = this.appendChain.then(() => this.appendNow(t, records));
+    this.appendChain = run.catch(() => {});
+    return run;
+  }
+
+  private async appendNow<T extends object>(t: Table<T>, records: T[]): Promise<void> {
     if (!records.length) return;
     const seen = new Set<string>();
     const fresh = records.filter((r) => {

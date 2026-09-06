@@ -11,6 +11,7 @@ import { importStatement, type ImportOutcome, type PendingPdf } from './statemen
 import { rehomeUnmatched } from './accounts';
 import { daysAgoIso, todayIso } from './dates';
 import { usage } from '../llm/gemini';
+import { mapPool } from './pool';
 import { gmailPace, type FetchedEmail } from '../google/gmail';
 
 export interface SyncOptions {
@@ -155,15 +156,23 @@ export async function importPending(opts: { force?: boolean; signal?: AbortSigna
   const queue = [...syncState.pendingPdfs];
   if (!queue.length) return;
   let n = 0;
-  for (const pdf of queue) {
-    if (opts.signal?.aborted) return;
-    n++;
-    syncState.progress = { phase: 'Importing statements', done: n, total: queue.length, note: pdf.filename };
-    syncState.phase = 'Importing statements';
-    emit();
-    const res = await importStatement(pdf, { force: opts.force, signal: opts.signal });
-    applyOutcome(pdf, res);
-  }
+  syncState.phase = 'Importing statements';
+  syncState.progress = { phase: 'Importing statements', done: 0, total: queue.length };
+  emit();
+  // Three at a time: each import is mostly waiting on the model. Sheet appends are serialized in db.
+  await mapPool(
+    queue,
+    3,
+    async (pdf) => {
+      if (opts.signal?.aborted) return;
+      const res = await importStatement(pdf, { force: opts.force, signal: opts.signal });
+      applyOutcome(pdf, res);
+      n++;
+      syncState.progress = { phase: 'Importing statements', done: n, total: queue.length, note: pdf.filename };
+      emit();
+    },
+    opts.signal,
+  ).catch((err) => log(`✖ statement import: ${String((err as Error).message ?? err)}`));
   const rehomed = await rehomeUnmatched();
   if (rehomed) log(`${rehomed} earlier alerts attached to accounts learned from statements`);
 }
