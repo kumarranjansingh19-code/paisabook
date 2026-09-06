@@ -5,7 +5,7 @@ import { settings, saveSettings } from '../store/local';
 import { hasValidToken, isLocalhost, redirectUri, startSignIn } from '../google/auth';
 import { testGemini } from '../llm/gemini';
 import { db, newId, stamp } from '../store/db';
-import { parseSpreadsheetId } from '../google/sheets';
+import { listOwnSpreadsheets, parseSpreadsheetId } from '../google/sheets';
 import { scanMailbox } from '../core/extract';
 import { discoverAccounts, type AccountProposal } from '../core/discover';
 import { discoverHeuristically } from '../core/heuristics';
@@ -102,7 +102,9 @@ const STEP_HTML: Record<Step, () => string> = {
         <button class="btn primary" data-action="create-sheet">Create a new sheet</button>
       </div>
       <p class="muted small">…or connect one PaisaBook created earlier (e.g. from another device):</p>
-      <label class="field">Spreadsheet URL or ID <input name="sheetId" value="${s.spreadsheetId}" placeholder="https://docs.google.com/spreadsheets/d/…" /></label>
+      <div class="row"><button class="btn" data-action="find-sheets">Find my PaisaBook sheets</button></div>
+      <div id="sheet-list"></div>
+      <label class="field">Or paste the spreadsheet URL / ID <input name="sheetId" value="${s.spreadsheetId}" placeholder="https://docs.google.com/spreadsheets/d/…" /></label>
       <div class="row">
         <a class="btn ghost" href="#/setup?step=gemini">← Back</a>
         <button class="btn" data-action="connect-sheet">Connect existing</button>
@@ -178,6 +180,25 @@ function wire(root: HTMLElement, step: Step): void {
       } catch (err) {
         status.innerHTML = `<p class="pill bad">${escapeHtml(String((err as Error).message))}</p>`;
       }
+    },
+    'find-sheets': async (el) => {
+      const box = root.querySelector<HTMLElement>('#sheet-list')!;
+      el.setAttribute('disabled', '');
+      box.innerHTML = spinner('Looking in your Drive…');
+      try {
+        const files = await listOwnSpreadsheets();
+        box.innerHTML = files.length
+          ? files.map((f) => `<div class="list-item"><div class="grow"><div class="title">${escapeHtml(f.name)}</div><div class="sub">last changed ${new Date(f.modifiedTime).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}</div></div><button class="btn small primary" data-action="pick-sheet" data-id="${f.id}">Connect</button></div>`).join('')
+          : `<p class="small muted">No PaisaBook sheets found in this Google account. (Only sheets created by this app are visible; a sheet you created by hand needs its URL pasted below.)</p>`;
+      } catch (err) {
+        box.innerHTML = `<p class="pill bad">${escapeHtml(String((err as Error).message))}</p>`;
+      } finally {
+        el.removeAttribute('disabled');
+      }
+    },
+    'pick-sheet': async (el) => {
+      root.querySelector<HTMLInputElement>('input[name=sheetId]')!.value = el.dataset.id!;
+      root.querySelector<HTMLElement>('[data-action=connect-sheet]')?.click();
     },
     'connect-sheet': async () => {
       const input = root.querySelector<HTMLInputElement>('input[name=sheetId]')!.value.trim();

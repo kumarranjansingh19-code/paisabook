@@ -60,7 +60,7 @@ export const transactionsView: View = {
 function filtered(): Transaction[] {
   const q = f.q.trim().toLowerCase();
   return db.transactions.rows
-    .filter((t) => t.status !== 'superseded')
+    .filter((t) => (f.status === 'superseded' ? t.status === 'superseded' : t.status !== 'superseded'))
     .filter((t) => (f.m ? t.posted_at.startsWith(f.m) : true))
     .filter((t) => (f.cat ? (f.cat === 'uncategorized' ? !t.category : t.category === f.cat) : true))
     .filter((t) => (f.acc ? t.account_id === f.acc : true))
@@ -76,7 +76,7 @@ function page(): string {
       <select name="m"><option value="" ${!f.m ? 'selected' : ''}>All months</option>${raw(months.map((m) => `<option value="${m}" ${m === f.m ? 'selected' : ''}>${monthLabel(m)}</option>`).join(''))}</select>
       <select name="acc"><option value="">All accounts</option>${raw(db.accounts.rows.map((a) => `<option value="${a.id}" ${a.id === f.acc ? 'selected' : ''}>${escapeHtml(a.display_name)}</option>`).join(''))}</select>
       <select name="cat"><option value="">All categories</option><option value="uncategorized" ${f.cat === 'uncategorized' ? 'selected' : ''}>uncategorized</option>${raw(categoryNames().map((c) => `<option value="${c}" ${c === f.cat ? 'selected' : ''}>${catLabel(c)}</option>`).join(''))}</select>
-      <select name="status"><option value="">Any status</option>${raw(['confirmed', 'provisional', 'needs_review', 'unmatched'].map((s) => `<option value="${s}" ${s === f.status ? 'selected' : ''}>${s.replace('_', ' ')}</option>`).join(''))}</select>
+      <select name="status"><option value="">Any status</option>${raw(['confirmed', 'provisional', 'needs_review', 'unmatched'].map((s) => `<option value="${s}" ${s === f.status ? 'selected' : ''}>${s.replace('_', ' ')}</option>`).join(''))}<option value="superseded" ${f.status === 'superseded' ? 'selected' : ''}>hidden (duplicates / merged)</option></select>
       <input name="q" placeholder="Search narration / amount" value="${f.q}" />
       <button class="btn" data-action="add">+ Manual</button>
     </div>
@@ -110,6 +110,7 @@ function statusPill(t: Transaction): string {
   if (t.status === 'needs_review') return '<span class="pill warn">not on statement</span>';
   if (t.status === 'provisional') return '<span class="pill muted">alert</span>';
   if (t.status === 'unmatched') return '<span class="pill bad">no account</span>';
+  if (t.status === 'superseded') return '<span class="pill muted">hidden</span>';
   if (t.source === 'sheet') return '<span class="pill muted">sheet</span>';
   if (t.source === 'manual') return '<span class="pill muted">manual</span>';
   if (t.categorized_by === 'user') return '<span class="pill">you</span>';
@@ -129,6 +130,8 @@ async function openTxn(id: string): Promise<void> {
      <label class="check"><input type="checkbox" name="rule" /> Also create a rule so similar narrations get this category automatically</label>
      <label class="field">Rule fragment (must appear in the narration) <input name="pattern" value="${escapeHtml(suggestFragment(t))}" /></label>
      ${t.status === 'needs_review' || t.status === 'provisional' ? `<label class="check"><input type="radio" name="fix" value="confirm" /> This alert is real (keep it)</label><label class="check"><input type="radio" name="fix" value="dup" /> Duplicate — hide it</label>` : ''}
+     ${t.status === 'confirmed' && t.source !== 'statement' ? `<label class="check"><input type="radio" name="fix" value="dup" /> Hide this row (duplicate / not mine)</label>` : ''}
+     ${t.status === 'superseded' ? `<label class="check"><input type="radio" name="fix" value="restore" /> Restore this row (it was hidden as a duplicate or merged)</label>` : ''}
      ${t.status === 'unmatched' ? `<label class="field">Attach to account <select name="acc"><option value="">—</option>${db.accounts.rows.map((a) => `<option value="${a.id}">${escapeHtml(a.display_name)}</option>`).join('')}</select></label>` : ''}`,
     { title: 'Transaction' },
   );
@@ -137,6 +140,7 @@ async function openTxn(id: string): Promise<void> {
   if (r.category !== t.category || r.merchant !== t.merchant) Object.assign(patch, { category: r.category, merchant: r.merchant, categorized_by: 'user' });
   if (r.fix === 'confirm') patch.status = 'confirmed';
   if (r.fix === 'dup') patch.status = 'superseded';
+  if (r.fix === 'restore') patch.status = t.source === 'statement' || t.statement_id ? 'confirmed' : 'provisional';
   if (r.acc) Object.assign(patch, { account_id: r.acc, status: 'provisional' });
   if (Object.keys(patch).length) {
     db.update(db.transactions, t.id, patch);
