@@ -43,21 +43,21 @@ export const sourcesView: View = {
 function page(): string {
   const srcs = db.sources.rows.filter((s) => s.sheet_name);
   return html`
-    <div class="row between"><h2>Other sources</h2><button class="btn primary" data-action="add">+ Add a sheet</button></div>
+    <div class="row between"><h2>Other sources</h2><md-filled-button data-action="add">+ Add a sheet</md-filled-button></div>
     <p class="muted small">Point PaisaBook at any Google Sheet with money in it: a manual expense log, a bank CSV you pasted, a Splitwise export, a cash diary. Gemini figures out the columns once; imports are deduplicated against alerts and statements.</p>
     <div class="card">${srcs.length
       ? raw(srcs
           .map(
             (s) => `<div class="list-item"><div class="grow"><div class="title">${escapeHtml(s.label)}</div>
             <div class="sub">tab “${escapeHtml(s.sheet_name)}” → ${escapeHtml(db.accounts.get(s.account_id)?.display_name ?? '?')} · ${s.rows_imported} rows · ${s.last_imported_at ? `last ${s.last_imported_at.slice(0, 10)}` : 'never imported'}</div></div>
-            <button class="btn small primary" data-action="import" data-id="${s.id}">Import</button><button class="btn small ghost" data-action="remove" data-id="${s.id}">✕</button></div>`,
+            <md-filled-button data-small data-action="import" data-id="${s.id}">Import</md-filled-button><md-text-button data-small data-action="remove" data-id="${s.id}">✕</md-text-button></div>`,
           )
           .join(''))
       : raw('<p class="muted">No extra sources yet.</p>')}</div>`;
 }
 
 async function wizard(root: HTMLElement): Promise<void> {
-  const step1 = await modal(`<label class="field">Google Sheet URL <input name="url" placeholder="https://docs.google.com/spreadsheets/d/…" required /></label><p class="small muted">Must be a sheet your Google account can open.</p>`, { title: 'Add a source', submit: 'Next' });
+  const step1 = await modal(`<md-outlined-text-field class="field" label="Google Sheet URL" name="url" placeholder="https://docs.google.com/spreadsheets/d/…" required></md-outlined-text-field><p class="small muted">Must be a sheet your Google account can open.</p>`, { title: 'Add a source', submit: 'Next' });
   if (!step1?.url) return;
   const box = document.createElement('div');
   box.className = 'card';
@@ -66,7 +66,7 @@ async function wizard(root: HTMLElement): Promise<void> {
   try {
     const { id, title, tabs } = await listTabs(step1.url);
     const step2 = await modal(
-      `<p><strong>${escapeHtml(title)}</strong></p><label class="field">Which tab? <select name="tab">${tabs.map((t) => `<option>${escapeHtml(t)}</option>`).join('')}</select></label>`,
+      `<p><strong>${escapeHtml(title)}</strong></p><md-outlined-select class="field" label="Which tab?" name="tab">${tabs.map((t) => `<md-select-option value="${escapeHtml(t)}"><div slot="headline">${escapeHtml(t)}</div></md-select-option>`).join('')}</md-outlined-select>`,
       { title: 'Pick a tab', submit: 'Analyse with AI' },
     );
     if (!step2?.tab) return box.remove();
@@ -83,8 +83,8 @@ async function wizard(root: HTMLElement): Promise<void> {
       `<p class="small">Gemini's reading: <em>${escapeHtml(describe(mapping))}</em>${mapping.notes ? `<br/>${escapeHtml(mapping.notes)}` : ''}</p>
        <p class="small muted">${sample.txns.length} of the first rows parsed cleanly${sample.failedRows.length ? `, ${sample.failedRows.length} couldn't be read mechanically (AI will read those)` : ''}.</p>
        ${previewTable(rows, mapping, sample.txns.slice(0, 5))}
-       <label class="field">Label <input name="label" value="${escapeHtml(`${title} / ${step2.tab}`)}" /></label>
-       <label class="field">Import into account <select name="acc"><option value="__new">＋ New account: ${escapeHtml(mapping.account_guess || 'from this sheet')}</option>${accounts.map((a) => `<option value="${a.id}">${escapeHtml(a.display_name)}</option>`).join('')}</select></label>
+       <md-outlined-text-field class="field" label="Label" name="label" value="${escapeHtml(`${title} / ${step2.tab}`)}"></md-outlined-text-field>
+       <md-outlined-select class="field" label="Import into account" name="acc"><md-select-option value="__new"><div slot="headline">＋ New account: ${escapeHtml(mapping.account_guess || 'from this sheet')}</div></md-select-option>${accounts.map((a) => `<md-select-option value="${a.id}"><div slot="headline">${escapeHtml(a.display_name)}</div></md-select-option>`).join('')}</md-outlined-select>
        <textarea name="mapping" hidden>${escapeHtml(JSON.stringify(mapping))}</textarea>`,
       { title: 'Confirm', submit: 'Save & import', wide: true },
     );

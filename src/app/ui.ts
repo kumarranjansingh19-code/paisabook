@@ -68,36 +68,52 @@ export function toast(msg: string, kind: 'info' | 'error' | 'ok' = 'info'): void
   toastTimer = window.setTimeout(() => box!.classList.remove('show'), kind === 'error' ? 7000 : 3500);
 }
 
-/** Simple modal; resolves with the form values or null when dismissed. */
+interface MdDialog extends HTMLElement {
+  open: boolean;
+  show(): void;
+  close(returnValue?: string): void;
+  returnValue: string;
+}
+
+/** Material dialog; resolves with the form values or null when dismissed. */
 export function modal(inner: string, opts: { title?: string; submit?: string; cancel?: string; wide?: boolean } = {}): Promise<Record<string, string> | null> {
   return new Promise((resolve) => {
-    const wrap = el('div', { class: 'modal-backdrop' });
-    wrap.innerHTML = html`
-      <form class="modal ${opts.wide ? 'wide' : ''}">
-        ${opts.title ? raw(`<h3>${escapeHtml(opts.title)}</h3>`) : ''}
-        <div class="modal-body">${raw(inner)}</div>
-        <div class="modal-actions">
-          <button type="button" class="btn ghost" data-close>${opts.cancel ?? 'Cancel'}</button>
-          ${opts.submit === '' ? '' : raw(`<button type="submit" class="btn primary">${escapeHtml(opts.submit ?? 'Save')}</button>`)}
-        </div>
-      </form>`;
-    const form = wrap.querySelector('form')!;
-    const close = (v: Record<string, string> | null) => {
-      wrap.remove();
-      resolve(v);
-    };
-    wrap.addEventListener('click', (e) => {
-      if (e.target === wrap) close(null);
-    });
-    form.querySelector('[data-close]')!.addEventListener('click', () => close(null));
-    form.addEventListener('submit', (e) => {
-      e.preventDefault();
+    const dialog = document.createElement('md-dialog') as MdDialog;
+    if (opts.wide) dialog.classList.add('wide');
+    dialog.innerHTML = html`
+      ${opts.title ? raw(`<div slot="headline">${escapeHtml(opts.title)}</div>`) : ''}
+      <form slot="content" id="dlg-form" class="modal-body">${raw(inner)}</form>
+      <div slot="actions">
+        <md-text-button type="button" data-cancel>${opts.cancel ?? 'Cancel'}</md-text-button>
+        ${opts.submit === '' ? '' : raw(`<md-filled-button type="button" data-ok>${escapeHtml(opts.submit ?? 'Save')}</md-filled-button>`)}
+      </div>`;
+    let result: Record<string, string> | null = null;
+    const form = dialog.querySelector('form')!;
+    const collect = () => {
       const data: Record<string, string> = {};
       new FormData(form).forEach((v, k) => (data[k] = String(v)));
-      close(data);
+      return data;
+    };
+    form.addEventListener('submit', (e) => {
+      // Enter in a field: treat as OK
+      e.preventDefault();
+      if (!form.reportValidity()) return;
+      result = collect();
+      dialog.close('ok');
     });
-    document.body.appendChild(wrap);
-    (form.querySelector('input,select,textarea') as HTMLElement | null)?.focus();
+    dialog.querySelector('[data-cancel]')!.addEventListener('click', () => dialog.close('cancel'));
+    dialog.querySelector('[data-ok]')?.addEventListener('click', () => {
+      if (!form.reportValidity()) return;
+      result = collect();
+      dialog.close('ok');
+    });
+    dialog.addEventListener('closed', () => {
+      dialog.remove();
+      resolve(dialog.returnValue === 'ok' ? result : null);
+    });
+    document.body.appendChild(dialog);
+    dialog.show();
+    setTimeout(() => (dialog.querySelector('md-outlined-text-field,md-outlined-select,input,textarea') as HTMLElement | null)?.focus(), 150);
   });
 }
 
@@ -106,7 +122,7 @@ export async function confirmDialog(msg: string, submit = 'Yes'): Promise<boolea
 }
 
 export function spinner(label = 'Working…'): string {
-  return `<div class="spinner-row"><span class="spinner"></span> ${escapeHtml(label)}</div>`;
+  return `<div class="spinner-row"><md-circular-progress indeterminate style="--md-circular-progress-size:22px"></md-circular-progress> ${escapeHtml(label)}</div>`;
 }
 
 export function pct(a: number, b: number): number {
@@ -117,10 +133,33 @@ export function catLabel(c: string): string {
   return categoryLabel(c);
 }
 
+/** Options for a native <select> (used for the compact inline category chip). */
 export function categoryOptions(selected: string, categories: readonly string[]): string {
   return [`<option value="" ${!selected ? 'selected' : ''}>— uncategorized —</option>`]
     .concat(categories.map((c) => `<option value="${c}" ${c === selected ? 'selected' : ''}>${escapeHtml(catLabel(c))}</option>`))
     .join('');
+}
+
+/** Options for an <md-outlined-select>. */
+export function mdOptions(items: Array<{ value: string; label: string }>, selected = ''): string {
+  return items.map((o) => `<md-select-option value="${escapeHtml(o.value)}" ${o.value === selected ? 'selected' : ''}><div slot="headline">${escapeHtml(o.label)}</div></md-select-option>`).join('');
+}
+
+/** Material selects treat an empty value as "nothing chosen", so "uncategorized" is carried as NONE_VALUE. */
+export const NONE_VALUE = '__none';
+export function mdCategoryOptions(selected: string, categories: readonly string[], allowNone = true): string {
+  const items = categories.map((c) => ({ value: c, label: catLabel(c) }));
+  return mdOptions(allowNone ? [{ value: NONE_VALUE, label: '— uncategorized —' }, ...items] : items, selected || (allowNone ? NONE_VALUE : ''));
+}
+export const fromNone = (v: string | undefined): string => (!v || v === NONE_VALUE ? '' : v);
+
+/** A checkbox row: Material checkbox + label text, form-associated under `name`. */
+export function check(name: string, label: string, checked = false, extra = ''): string {
+  return `<label class="check"><md-checkbox name="${name}" touch-target="wrapper" ${checked ? 'checked' : ''} ${extra}></md-checkbox><span>${label}</span></label>`;
+}
+
+export function spinnerInline(): string {
+  return '<md-circular-progress indeterminate style="--md-circular-progress-size:20px"></md-circular-progress>';
 }
 
 export function dateInput(name: string, value: string, extra = ''): string {

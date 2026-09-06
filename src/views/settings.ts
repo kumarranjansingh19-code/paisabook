@@ -26,8 +26,8 @@ export const moreView: View = {
         <h3>App</h3>
         <p class="small muted">Build <code>${__BUILD__}</code>. New builds are checked for every 15 minutes and on launch; updates apply automatically, or after a running sync finishes.</p>
         <div class="row">
-          <button class="btn primary small" data-action="update">Check for updates</button>
-          <button class="btn small ghost" data-action="hard-refresh">Clear cache & reinstall</button>
+          <md-filled-button data-small data-action="update">Check for updates</md-filled-button>
+          <md-text-button data-small data-action="hard-refresh">Clear cache & reinstall</md-text-button>
         </div>
         <div id="update-status" class="small" style="margin-top:.5rem"></div>
       </div>
@@ -45,7 +45,7 @@ export const moreView: View = {
         try {
           const found = await w.paisabookCheckUpdate();
           status.innerHTML = found
-            ? `<span class="pill ok">Update found</span> <button class="btn small primary" data-action="apply-update">Install & restart</button>`
+            ? `<span class="pill ok">Update found</span> <md-filled-button data-small data-action="apply-update">Install & restart</md-filled-button>`
             : `<span class="pill ok">You're on the latest build</span>`;
         } catch (err) {
           status.innerHTML = `<span class="pill bad">${escapeHtml(String((err as Error).message))}</span>`;
@@ -80,8 +80,8 @@ export const settingsView: View = {
       },
       'add-family': async () => {
         const r = await modal(
-          `<label class="field">Name <input name="name" required /></label>
-           <label class="field">Relation <select name="relation"><option value="self">me</option><option>spouse</option><option>parent</option><option>child</option><option>sibling</option><option>other</option></select></label>`,
+          `<md-outlined-text-field class="field" label="Name" name="name" required></md-outlined-text-field>
+           <md-outlined-select class="field" label="Relation" name="relation"><md-select-option value="self"><div slot="headline">me</div></md-select-option><md-select-option value="spouse"><div slot="headline">spouse</div></md-select-option><md-select-option value="parent"><div slot="headline">parent</div></md-select-option><md-select-option value="child"><div slot="headline">child</div></md-select-option><md-select-option value="sibling"><div slot="headline">sibling</div></md-select-option><md-select-option value="other"><div slot="headline">other</div></md-select-option></md-outlined-select>`,
           { title: 'Family member', submit: 'Add' },
         );
         if (!r?.name) return;
@@ -132,9 +132,9 @@ export const settingsView: View = {
       },
       'add-category': async () => {
         const r = await modal(
-          `<label class="field">Name <input name="label" placeholder="Pet care" required /></label>
-           <label class="field">Kind <select name="kind"><option value="spend">Spend (counts as consumption)</option><option value="income">Income</option><option value="transfer">Transfer (never spend or income)</option><option value="investment">Investment</option><option value="refund">Refund (reduces spend)</option></select></label>
-           <label class="field">What goes here (helps the AI) <input name="description" placeholder="vet, pet food, grooming" /></label>`,
+          `<md-outlined-text-field class="field" label="Name" name="label" placeholder="Pet care" required></md-outlined-text-field>
+           <md-outlined-select class="field" label="Kind" name="kind"><md-select-option value="spend"><div slot="headline">Spend (counts as consumption)</div></md-select-option><md-select-option value="income"><div slot="headline">Income</div></md-select-option><md-select-option value="transfer"><div slot="headline">Transfer (never spend or income)</div></md-select-option><md-select-option value="investment"><div slot="headline">Investment</div></md-select-option><md-select-option value="refund"><div slot="headline">Refund (reduces spend)</div></md-select-option></md-outlined-select>
+           <md-outlined-text-field class="field" label="What goes here (helps the AI)" name="description" placeholder="vet, pet food, grooming"></md-outlined-text-field>`,
           { title: 'New category', submit: 'Add' },
         );
         if (!r?.label) return;
@@ -157,44 +157,42 @@ function page(): string {
     <div class="card">
       <h3>Google</h3>
       <p class="small">Client ID <code>${s.googleClientId || '—'}</code><br/>Redirect URI <code>${redirectUri()}</code></p>
-      <div class="row">${hasValidToken() ? raw('<span class="pill ok">signed in</span> <button class="btn small" data-action="signout">Sign out</button>') : raw('<button class="btn small primary" data-action="signin">Sign in</button>')}
-        <button class="btn small" data-action="change-sheet">Change sheet</button>
+      <div class="row">${hasValidToken() ? raw('<span class="pill ok">signed in</span> <md-outlined-button data-small data-action="signout">Sign out</md-outlined-button>') : raw('<md-filled-button data-small data-action="signin">Sign in</md-filled-button>')}
+        <md-outlined-button data-small data-action="change-sheet">Change sheet</md-outlined-button>
         ${db.loaded ? raw(`<a class="btn small" href="${db.sheetUrl()}" target="_blank" rel="noopener">Open sheet ↗</a>`) : ''}</div>
     </div>
     <div class="card">
       <h3>Gemini</h3>
-      <label class="field">API key <input name="geminiApiKey" type="password" value="${s.geminiApiKey}" autocomplete="off" /></label>
-      <div class="row"><label class="field grow">Bulk model <input name="modelBulk" value="${s.modelBulk}" /></label><label class="field grow">Reasoning model <input name="modelReasoning" value="${s.modelReasoning}" /></label></div>
-      <label class="field">How alerts are read
-        <select name="readMode">
-          <option value="accurate" ${s.readMode !== 'economy' ? 'selected' : ''}>Accurate — the AI writes every entry; rules only double-check amounts</option>
-          <option value="economy" ${s.readMode === 'economy' ? 'selected' : ''}>Economy — rules write what they can, the AI reads the rest (fewer calls)</option>
-        </select>
-      </label>
-      <label class="field">Extra Gmail search terms (added to every scan) <input name="gmailExtraQuery" value="${s.gmailExtraQuery}" placeholder='e.g. -from:newsletter@example.com' /></label>
-      <button class="btn primary" data-action="save-keys">Save & test</button>
+      <md-outlined-text-field class="field" label="API key" name="geminiApiKey" type="password" value="${s.geminiApiKey}" autocomplete="off"></md-outlined-text-field>
+      <div class="row"><md-outlined-text-field class="field grow" label="Bulk model" name="modelBulk" value="${s.modelBulk}"></md-outlined-text-field><md-outlined-text-field class="field grow" label="Reasoning model" name="modelReasoning" value="${s.modelReasoning}"></md-outlined-text-field></div>
+      <md-outlined-select class="field" label="How alerts are read" name="readMode">
+          <md-select-option value="accurate" ${s.readMode !== 'economy' ? 'selected' : ''}><div slot="headline">Accurate — the AI writes every entry; rules only double-check amounts</div></md-select-option>
+          <md-select-option value="economy" ${s.readMode === 'economy' ? 'selected' : ''}><div slot="headline">Economy — rules write what they can, the AI reads the rest (fewer calls)</div></md-select-option>
+        </md-outlined-select>
+      <md-outlined-text-field class="field" label="Extra Gmail search terms (added to every scan)" name="gmailExtraQuery" value="${s.gmailExtraQuery}" placeholder='e.g. -from:newsletter@example.com'></md-outlined-text-field>
+      <md-filled-button data-action="save-keys">Save & test</md-filled-button>
       ${usage.calls ? raw(`<p class="muted small">This session: ${usage.calls} AI calls, ${Math.round(usage.inputTokens / 1000)}k tokens in.</p>`) : ''}
     </div>
     <div class="card">
-      <div class="row between"><h3>Family</h3><button class="btn small" data-action="add-family">+ Add</button></div>
+      <div class="row between"><h3>Family</h3><md-outlined-button data-small data-action="add-family">+ Add</md-outlined-button></div>
       <p class="small muted">Names help the AI tag transfers to family as <em>family transfer</em> instead of spending.</p>
-      ${db.family.rows.length ? raw(db.family.rows.map((f) => `<div class="list-item"><div class="grow">${escapeHtml(f.name)} <span class="muted small">${escapeHtml(f.relation)}</span></div><button class="btn small ghost" data-action="del-family" data-id="${f.id}">✕</button></div>`).join('')) : ''}
+      ${db.family.rows.length ? raw(db.family.rows.map((f) => `<div class="list-item"><div class="grow">${escapeHtml(f.name)} <span class="muted small">${escapeHtml(f.relation)}</span></div><md-text-button data-small data-action="del-family" data-id="${f.id}">✕</md-text-button></div>`).join('')) : ''}
     </div>
     <div class="card">
       <h3>Statement passwords: let the app guess</h3>
       <p class="small muted">Banks build PDF passwords from these (and say which in the email). Stored only on this device; the app tries the usual recipes before asking you, and remembers the one that works per account.</p>
       <div class="row">
-        <label class="field grow">Date of birth <input type="date" name="pwDob" value="${s.pwRecipe?.dob ?? ''}" /></label>
-        <label class="field grow">PAN <input name="pwPan" value="${s.pwRecipe?.pan ?? ''}" autocapitalize="characters" autocomplete="off" placeholder="ABCDE1234F" /></label>
+        <md-outlined-text-field class="field grow" label="Date of birth" type="date" name="pwDob" value="${s.pwRecipe?.dob ?? ''}"></md-outlined-text-field>
+        <md-outlined-text-field class="field grow" label="PAN" name="pwPan" value="${s.pwRecipe?.pan ?? ''}" autocapitalize="characters" autocomplete="off" placeholder="ABCDE1234F"></md-outlined-text-field>
       </div>
       <div class="row">
-        <label class="field grow">Mobile <input name="pwMobile" inputmode="numeric" value="${s.pwRecipe?.mobile ?? ''}" autocomplete="off" /></label>
-        <label class="field grow">Name as on the account <input name="pwName" value="${s.pwRecipe?.name ?? ''}" autocomplete="off" /></label>
+        <md-outlined-text-field class="field grow" label="Mobile" name="pwMobile" inputmode="numeric" value="${s.pwRecipe?.mobile ?? ''}" autocomplete="off"></md-outlined-text-field>
+        <md-outlined-text-field class="field grow" label="Name as on the account" name="pwName" value="${s.pwRecipe?.name ?? ''}" autocomplete="off"></md-outlined-text-field>
       </div>
-      <button class="btn primary small" data-action="save-recipe">Save & try waiting statements</button>
+      <md-filled-button data-small data-action="save-recipe">Save & try waiting statements</md-filled-button>
     </div>
     <div class="card">
-      <div class="row between"><h3>Categories</h3><button class="btn small" data-action="add-category">+ Add</button></div>
+      <div class="row between"><h3>Categories</h3><md-outlined-button data-small data-action="add-category">+ Add</md-outlined-button></div>
       <p class="small muted">Copied into your sheet's <em>categories</em> tab the first time; edit labels and descriptions there, or add more here. The kind decides how a category counts: spend, income, transfer (never spend), investment, or refund (reduces spend).</p>
       ${db.loaded ? raw(`<div class="table-wrap"><table><thead><tr><th>Category</th><th>Kind</th><th>Used</th></tr></thead><tbody>${categories()
         .map((c) => `<tr><td>${escapeHtml(c.label)} <span class="muted small">${escapeHtml(c.name)}</span></td><td><span class="pill muted">${c.kind}</span></td><td class="num">${db.liveTransactions().filter((t) => t.category === c.name).length}</td></tr>`)
@@ -203,7 +201,7 @@ function page(): string {
     <div class="card">
       <h3>Data</h3>
       <p class="small muted">Statement passwords stay on this device (set them from the key button on each account). Everything else lives in your Google Sheet.</p>
-      <div class="row"><button class="btn" data-action="export">Export CSV</button><button class="btn" data-action="clear-mail-cache">Clear mail & AI cache</button><button class="btn danger" data-action="reset">Forget this device</button></div>
+      <div class="row"><md-outlined-button data-action="export">Export CSV</md-outlined-button><md-outlined-button data-action="clear-mail-cache">Clear mail & AI cache</md-outlined-button><md-outlined-button class="danger" data-action="reset">Forget this device</md-outlined-button></div>
       <p class="small muted">The mail & AI cache holds downloaded emails and model results on this device so re-runs are free. Clear it to measure a true first-time run, or to free space.</p>
     </div>`;
 }

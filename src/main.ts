@@ -1,4 +1,5 @@
 import './styles.css';
+import './app/material';
 import { registerSW } from 'virtual:pwa-register';
 import { consumeRedirect } from './google/auth';
 import { onSync, syncState } from './core/sync';

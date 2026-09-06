@@ -3,6 +3,7 @@ import { settings } from '../store/local';
 import { hasValidToken, startSignIn } from '../google/auth';
 import { syncState, onSync } from '../core/sync';
 import { html, raw, toast } from './ui';
+import { addRipples } from './material';
 
 export interface View {
   /** Render into the container; return a cleanup fn if you subscribed to anything. */
@@ -85,6 +86,9 @@ export async function renderCurrent(): Promise<void> {
   } catch (err) {
     main.innerHTML = html`<div class="card error"><h3>Something broke</h3><pre>${String((err as Error).stack ?? err)}</pre></div>`;
   }
+  addRipples(app);
+  // views re-render themselves on data changes; keep ripples on new rows
+  new MutationObserver(() => addRipples(main)).observe(main, { childList: true, subtree: true });
   if (!unsubSync) unsubSync = onSync(updateSyncBadge);
   updateSyncBadge();
 }
@@ -106,7 +110,7 @@ const wu = window as unknown as { paisabookUpdateReady?: () => boolean; paisaboo
 /** A new build is downloaded and waiting: offer it without forcing a reload mid-sync. */
 function updateBar(): string {
   if (!wu.paisabookUpdateReady?.()) return '';
-  return `<div class="install-bar update-bar"><span>A new version of PaisaBook is ready.</span><button class="btn small primary" data-apply-update>Update now</button></div>`;
+  return `<div class="install-bar update-bar"><span>A new version of PaisaBook is ready.</span><md-filled-button data-small data-apply-update>Update now</md-filled-button></div>`;
 }
 document.addEventListener('paisabook:update-ready', () => {
   const slot = document.getElementById('update-slot');
@@ -127,11 +131,11 @@ function installBar(): string {
   if (isStandalone() || dismissed) return '';
   if (w.paisabookCanInstall?.()) {
     return `<div class="install-bar"><span>Install PaisaBook on this device for the app experience (works offline, opens full-screen).</span>
-      <button class="btn small primary" data-install>Install</button><button class="btn small ghost" data-install-dismiss title="Not now">✕</button></div>`;
+      <md-filled-button data-small data-install>Install</md-filled-button><md-text-button data-small data-install-dismiss title="Not now">✕</md-text-button></div>`;
   }
   if (isIos()) {
     return `<div class="install-bar"><span>To install on iPhone/iPad: tap <strong>Share</strong> then <strong>Add to Home Screen</strong>.</span>
-      <button class="btn small ghost" data-install-dismiss title="Not now">✕</button></div>`;
+      <md-text-button data-small data-install-dismiss title="Not now">✕</md-text-button></div>`;
   }
   return '';
 }
@@ -184,7 +188,7 @@ function signInCard(): string {
   return `<div class="card center">
     <h2>Sign in to Google</h2>
     <p class="muted">Your session expired. Sign in again to read Gmail and your Sheet. Nothing leaves your browser except calls to Google and Gemini.</p>
-    <button class="btn primary" data-signin>Sign in with Google</button>
+    <md-filled-button data-signin>Sign in with Google</md-filled-button>
   </div>`;
 }
 

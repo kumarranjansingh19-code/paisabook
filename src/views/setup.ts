@@ -57,19 +57,17 @@ const STEP_HTML: Record<Step, () => string> = {
           <li>Enable the <strong>Gmail API</strong> and the <strong>Google Sheets API</strong>.</li>
           <li><strong>OAuth consent screen</strong> → External → fill the app name and your email → add yourself under <em>Test users</em>. Leave it in Testing mode (no verification needed for yourself).</li>
           <li><strong>Credentials → Create credentials → OAuth client ID</strong>. For a phone or hosted URL choose <strong>Web application</strong> and add this exact URL to BOTH <em>Authorized JavaScript origins</em> (without the trailing slash) and <em>Authorized redirect URIs</em> (with it):
-            <div class="copy" data-copy="${redirectUri()}">${redirectUri()} <button type="button" class="btn small" data-action="copy">copy</button></div>
-            <div class="copy" data-copy="${location.origin}">${location.origin} <button type="button" class="btn small" data-action="copy">copy</button></div>
+            <div class="copy" data-copy="${redirectUri()}">${redirectUri()} <md-text-button data-small data-action="copy">copy</md-text-button></div>
+            <div class="copy" data-copy="${location.origin}">${location.origin} <md-text-button data-small data-action="copy">copy</md-text-button></div>
             For localhost only, a <strong>Desktop app</strong> client needs no URLs.
           </li>
           <li>Download the client JSON and paste it below (a bare Client ID also works, but then you'll be asked to sign in again every hour).</li>
         </ol>
       </details>
-      <label class="field">Client JSON or Client ID
-        <textarea name="clientJson" placeholder='{"web":{"client_id":"1234-abc.apps.googleusercontent.com", ...}}  — or just the client_id'>${s.googleClientId}</textarea>
-      </label>
+      <md-outlined-text-field type="textarea" rows="4" class="field" label="Client JSON or Client ID" name="clientJson" placeholder='{"web":{"client_id":"1234-abc.apps.googleusercontent.com", ...}}  — or just the client_id' value="${s.googleClientId}"></md-outlined-text-field>
       <label class="field">Or upload the JSON file <input type="file" accept=".json,application/json" name="clientFile" /></label>
       <div class="row">
-        <button class="btn primary" data-action="google">Save & sign in with Google</button>
+        <md-filled-button data-action="google">Save & sign in with Google</md-filled-button>
         ${hasValidToken() ? raw('<span class="pill ok">signed in</span> <a class="btn" href="#/setup?step=gemini">Next →</a>') : ''}
       </div>
       <p class="small muted">Scopes requested: read Gmail, edit Sheets, create files in Drive. Tokens live only in this browser.</p>
@@ -81,14 +79,14 @@ const STEP_HTML: Record<Step, () => string> = {
       <h2>2. Gemini API key</h2>
       <p class="muted">Gemini reads your bank emails and statements. Get a key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.</p>
       <p class="small"><strong>Enable billing</strong> on that key's project: on the free tier Google may use your prompts (i.e. your financial data) to improve its products. The paid tier costs a few rupees per month for a normal inbox.</p>
-      <label class="field">API key <input name="geminiKey" type="password" autocomplete="off" value="${s.geminiApiKey}" placeholder="AIza…" /></label>
+      <md-outlined-text-field class="field" label="API key" name="geminiKey" type="password" autocomplete="off" value="${s.geminiApiKey}" placeholder="AIza…"></md-outlined-text-field>
       <div class="row">
-        <label class="field grow">Bulk model (cheap: email reading) <input name="modelBulk" value="${s.modelBulk}" /></label>
-        <label class="field grow">Reasoning model (statements, categorization) <input name="modelReasoning" value="${s.modelReasoning}" /></label>
+        <md-outlined-text-field class="field grow" label="Bulk model (cheap: email reading)" name="modelBulk" value="${s.modelBulk}"></md-outlined-text-field>
+        <md-outlined-text-field class="field grow" label="Reasoning model (statements, categorization)" name="modelReasoning" value="${s.modelReasoning}"></md-outlined-text-field>
       </div>
       <div class="row">
         <a class="btn ghost" href="#/setup?step=google">← Back</a>
-        <button class="btn primary" data-action="gemini">Test & continue</button>
+        <md-filled-button data-action="gemini">Test & continue</md-filled-button>
       </div>
       <div id="gemini-status"></div>
     </div>`;
@@ -99,15 +97,15 @@ const STEP_HTML: Record<Step, () => string> = {
       <h2>3. Your ledger: a Google Sheet</h2>
       <p class="muted">Every transaction, account, rule and import log is a row in a spreadsheet you own. Open it any time, make charts, or delete it when you're done.</p>
       <div class="row">
-        <button class="btn primary" data-action="create-sheet">Create a new sheet</button>
+        <md-filled-button data-action="create-sheet">Create a new sheet</md-filled-button>
       </div>
       <p class="muted small">…or connect one PaisaBook created earlier (e.g. from another device):</p>
-      <div class="row"><button class="btn" data-action="find-sheets">Find my PaisaBook sheets</button></div>
+      <div class="row"><md-outlined-button data-action="find-sheets">Find my PaisaBook sheets</md-outlined-button></div>
       <div id="sheet-list"></div>
-      <label class="field">Or paste the spreadsheet URL / ID <input name="sheetId" value="${s.spreadsheetId}" placeholder="https://docs.google.com/spreadsheets/d/…" /></label>
+      <md-outlined-text-field class="field" label="Or paste the spreadsheet URL / ID" name="sheetId" value="${s.spreadsheetId}" placeholder="https://docs.google.com/spreadsheets/d/…"></md-outlined-text-field>
       <div class="row">
         <a class="btn ghost" href="#/setup?step=gemini">← Back</a>
-        <button class="btn" data-action="connect-sheet">Connect existing</button>
+        <md-outlined-button data-action="connect-sheet">Connect existing</md-outlined-button>
       </div>
       <div id="sheet-status"></div>
     </div>`;
@@ -115,10 +113,10 @@ const STEP_HTML: Record<Step, () => string> = {
   accounts: () => html`<div class="card">
       <h2>4. Your accounts</h2>
       <p class="muted">PaisaBook will scan the last 60 days of mail and propose the bank accounts and cards it sees. Tick the ones that are yours. You can add more later under Accounts.</p>
-      <label class="field">Your name as it appears in bank transfers (so money you move between your own accounts isn't counted as spending) <input name="selfName" placeholder="e.g. Asha Verma" /></label>
+      <md-outlined-text-field class="field" label="Your name as it appears in bank transfers (so money you move between your own accounts isn't counted as spending)" name="selfName" placeholder="e.g. Asha Verma"></md-outlined-text-field>
       <div class="row">
-        <button class="btn primary" data-action="discover">Scan my mail for accounts</button>
-        <button class="btn ghost" data-action="skip-accounts">Skip, I'll add them manually</button>
+        <md-filled-button data-action="discover">Scan my mail for accounts</md-filled-button>
+        <md-text-button data-action="skip-accounts">Skip, I'll add them manually</md-text-button>
       </div>
       <div id="discover-status"></div>
     </div>`,
@@ -130,10 +128,10 @@ const STEP_HTML: Record<Step, () => string> = {
 };
 
 function wire(root: HTMLElement, step: Step): void {
-  root.querySelector<HTMLInputElement>('input[name=clientFile]')?.addEventListener('change', async (e) => {
+  root.querySelector<HTMLInputElement>('[name=clientFile]')?.addEventListener('change', async (e) => {
     const f = (e.target as HTMLInputElement).files?.[0];
     if (!f) return;
-    root.querySelector<HTMLTextAreaElement>('textarea[name=clientJson]')!.value = await f.text();
+    root.querySelector<HTMLTextAreaElement>('[name=clientJson]')!.value = await f.text();
   });
   onAction(root, {
     copy: (el) => {
@@ -141,7 +139,7 @@ function wire(root: HTMLElement, step: Step): void {
       navigator.clipboard?.writeText(text).then(() => toast('Copied'));
     },
     google: async () => {
-      const rawText = root.querySelector<HTMLTextAreaElement>('textarea[name=clientJson]')!.value.trim();
+      const rawText = root.querySelector<HTMLTextAreaElement>('[name=clientJson]')!.value.trim();
       const c = parseClientJson(rawText);
       if (!c.clientId) {
         toast('Could not find a client_id in that text', 'error');
@@ -155,9 +153,9 @@ function wire(root: HTMLElement, step: Step): void {
       await startSignIn('#/setup?step=gemini');
     },
     gemini: async () => {
-      const key = root.querySelector<HTMLInputElement>('input[name=geminiKey]')!.value.trim();
-      const modelBulk = root.querySelector<HTMLInputElement>('input[name=modelBulk]')!.value.trim();
-      const modelReasoning = root.querySelector<HTMLInputElement>('input[name=modelReasoning]')!.value.trim();
+      const key = root.querySelector<HTMLInputElement>('[name=geminiKey]')!.value.trim();
+      const modelBulk = root.querySelector<HTMLInputElement>('[name=modelBulk]')!.value.trim();
+      const modelReasoning = root.querySelector<HTMLInputElement>('[name=modelReasoning]')!.value.trim();
       if (!key) return toast('Enter the API key', 'error');
       saveSettings({ geminiApiKey: key, modelBulk, modelReasoning });
       const status = root.querySelector('#gemini-status')!;
@@ -188,7 +186,7 @@ function wire(root: HTMLElement, step: Step): void {
       try {
         const files = await listOwnSpreadsheets();
         box.innerHTML = files.length
-          ? files.map((f) => `<div class="list-item"><div class="grow"><div class="title">${escapeHtml(f.name)}</div><div class="sub">last changed ${new Date(f.modifiedTime).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}</div></div><button class="btn small primary" data-action="pick-sheet" data-id="${f.id}">Connect</button></div>`).join('')
+          ? files.map((f) => `<div class="list-item"><div class="grow"><div class="title">${escapeHtml(f.name)}</div><div class="sub">last changed ${new Date(f.modifiedTime).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}</div></div><md-filled-button data-small data-action="pick-sheet" data-id="${f.id}">Connect</md-filled-button></div>`).join('')
           : `<p class="small muted">No PaisaBook sheets found in this Google account. (Only sheets created by this app are visible; a sheet you created by hand needs its URL pasted below.)</p>`;
       } catch (err) {
         box.innerHTML = `<p class="pill bad">${escapeHtml(String((err as Error).message))}</p>`;
@@ -197,11 +195,11 @@ function wire(root: HTMLElement, step: Step): void {
       }
     },
     'pick-sheet': async (el) => {
-      root.querySelector<HTMLInputElement>('input[name=sheetId]')!.value = el.dataset.id!;
+      root.querySelector<HTMLInputElement>('[name=sheetId]')!.value = el.dataset.id!;
       root.querySelector<HTMLElement>('[data-action=connect-sheet]')?.click();
     },
     'connect-sheet': async () => {
-      const input = root.querySelector<HTMLInputElement>('input[name=sheetId]')!.value.trim();
+      const input = root.querySelector<HTMLInputElement>('[name=sheetId]')!.value.trim();
       if (!input) return toast('Paste the sheet URL', 'error');
       const status = root.querySelector('#sheet-status')!;
       status.innerHTML = spinner('Connecting…');
@@ -267,7 +265,7 @@ function wire(root: HTMLElement, step: Step): void {
     },
     'add-selected': async (el) => {
       const box = el.closest<HTMLElement>('#discover-status')!;
-      const picks = [...box.querySelectorAll<HTMLInputElement>('input[type=checkbox]:checked')];
+      const picks = [...box.querySelectorAll<HTMLInputElement>('md-checkbox[data-proposal]')].filter((c) => c.checked);
       if (!picks.length) return toast('Tick at least one account, or skip', 'error');
       const buttons = [...box.querySelectorAll<HTMLButtonElement>('button')];
       buttons.forEach((b) => b.setAttribute('disabled', ''));
@@ -293,9 +291,9 @@ function wire(root: HTMLElement, step: Step): void {
     },
     'add-manual': async () => {
       const r = await modal(
-        `<label class="field">Type <select name="kind"><option value="bank">Bank account</option><option value="credit_card">Credit card</option><option value="cash">Cash</option><option value="wallet">Wallet</option></select></label>
-         <label class="field">Institution <input name="institution" placeholder="HDFC Bank" required /></label>
-         <label class="field">Masked number (last 4) <input name="ref" placeholder="XX1234" /></label>`,
+        `<md-outlined-select class="field" label="Type" name="kind"><md-select-option value="bank"><div slot="headline">Bank account</div></md-select-option><md-select-option value="credit_card"><div slot="headline">Credit card</div></md-select-option><md-select-option value="cash"><div slot="headline">Cash</div></md-select-option><md-select-option value="wallet"><div slot="headline">Wallet</div></md-select-option></md-outlined-select>
+         <md-outlined-text-field class="field" label="Institution" name="institution" placeholder="HDFC Bank" required></md-outlined-text-field>
+         <md-outlined-text-field class="field" label="Masked number (last 4)" name="ref" placeholder="XX1234"></md-outlined-text-field>`,
         { title: 'Add account', submit: 'Add' },
       );
       if (!r) return;
@@ -309,25 +307,25 @@ function wire(root: HTMLElement, step: Step): void {
 function renderProposals(box: HTMLElement, proposals: AccountProposal[], partial?: { read: number; total: number; reason: string }): void {
   const banner = partial
     ? `<div class="card warn small">⏸ Gmail cut the scan short after <strong>${partial.read} of ${partial.total}</strong> emails (${escapeHtml(partial.reason.slice(0, 80))}).
-        Here's what was found so far. <button class="btn small" data-action="discover">Continue scanning from there</button> or add these and move on.</div>`
+        Here's what was found so far. <md-outlined-button data-small data-action="discover">Continue scanning from there</md-outlined-button> or add these and move on.</div>`
     : '';
   if (!proposals.length) {
     box.innerHTML = `${banner}<p class="muted">No bank or card emails found${partial ? ' yet' : ' in the last 60 days'}. Add accounts manually.</p>
-      <div class="row"><button class="btn" data-action="add-manual">Add manually</button><button class="btn primary" data-action="skip-accounts">Continue</button></div>`;
+      <div class="row"><md-outlined-button data-action="add-manual">Add manually</md-outlined-button><md-filled-button data-action="skip-accounts">Continue</md-filled-button></div>`;
     return;
   }
   box.innerHTML = `${banner}<div class="stack">${proposals
     .map(
-      (p) => `<label class="check"><input type="checkbox" checked data-proposal='${escapeHtml(JSON.stringify(p))}' />
+      (p) => `<label class="check"><md-checkbox touch-target="wrapper" checked data-proposal='${escapeHtml(JSON.stringify(p))}'></md-checkbox>
         <span><strong>${escapeHtml(p.institution)}</strong> ${p.kind === 'credit_card' ? 'card' : 'account'} ${p.last4 ? `••${p.last4}` : ''}
         <span class="muted small">— seen ${p.seen}× · e.g. “${escapeHtml(p.example_subject)}”${p.statement_sender ? ` · statements from ${escapeHtml(p.statement_sender)}` : ''}</span></span></label>`,
     )
     .join('')}
-    <div class="row"><button class="btn primary" data-action="add-selected">Add selected</button><button class="btn" data-action="add-manual">Add another manually</button></div></div>`;
+    <div class="row"><md-filled-button data-action="add-selected">Add selected</md-filled-button><md-outlined-button data-action="add-manual">Add another manually</md-outlined-button></div></div>`;
 }
 
 async function saveSelf(root: HTMLElement): Promise<void> {
-  const name = root.querySelector<HTMLInputElement>('input[name=selfName]')?.value.trim();
+  const name = root.querySelector<HTMLInputElement>('[name=selfName]')?.value.trim();
   if (!name || db.family.rows.some((f) => f.relation === 'self')) return;
   await db.append(db.family, [{ id: newId('fam'), name, relation: 'self', created_at: stamp() }]);
 }

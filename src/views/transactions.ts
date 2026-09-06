@@ -1,5 +1,5 @@
 import type { View } from '../app/router';
-import { html, raw, money, onAction, categoryOptions, catLabel, modal, toast } from '../app/ui';
+import { html, raw, money, onAction, categoryOptions, mdCategoryOptions, fromNone, catLabel, modal, toast } from '../app/ui';
 import { db, type Transaction } from '../store/db';
 import { categoryNames } from '../core/categories';
 import { setCategory, addRule } from '../core/categorize';
@@ -31,7 +31,7 @@ export const transactionsView: View = {
     root.addEventListener('change', async (e) => {
       const t = e.target as HTMLSelectElement | HTMLInputElement;
       if (t.name in f) {
-        f[t.name as keyof Filter] = t.value;
+        f[t.name as keyof Filter] = t.value === 'all' ? '' : t.value;
         draw();
       } else if (t.dataset.cat) {
         await setCategory(t.dataset.cat, t.value);
@@ -73,12 +73,12 @@ function page(): string {
   const months = availableMonths(db.liveTransactions());
   return html`
     <div class="filters">
-      <select name="m"><option value="" ${!f.m ? 'selected' : ''}>All months</option>${raw(months.map((m) => `<option value="${m}" ${m === f.m ? 'selected' : ''}>${monthLabel(m)}</option>`).join(''))}</select>
-      <select name="acc"><option value="">All accounts</option>${raw(db.accounts.rows.map((a) => `<option value="${a.id}" ${a.id === f.acc ? 'selected' : ''}>${escapeHtml(a.display_name)}</option>`).join(''))}</select>
-      <select name="cat"><option value="">All categories</option><option value="uncategorized" ${f.cat === 'uncategorized' ? 'selected' : ''}>uncategorized</option>${raw(categoryNames().map((c) => `<option value="${c}" ${c === f.cat ? 'selected' : ''}>${catLabel(c)}</option>`).join(''))}</select>
-      <select name="status"><option value="">Any status</option>${raw(['confirmed', 'provisional', 'needs_review', 'unmatched'].map((s) => `<option value="${s}" ${s === f.status ? 'selected' : ''}>${s.replace('_', ' ')}</option>`).join(''))}<option value="superseded" ${f.status === 'superseded' ? 'selected' : ''}>hidden (duplicates / merged)</option></select>
-      <input name="q" placeholder="Search narration / amount" value="${f.q}" />
-      <button class="btn" data-action="add">+ Manual</button>
+      <md-outlined-select name="m"><md-select-option value="all" ${!f.m ? 'selected' : ''}><div slot="headline">All months</div></md-select-option>${raw(months.map((m) => `<md-select-option value="${m}" ${m === f.m ? 'selected' : ''}><div slot="headline">${monthLabel(m)}</div></md-select-option>`).join(''))}</md-outlined-select>
+      <md-outlined-select name="acc"><md-select-option value="all" ${!f.acc ? 'selected' : ''}><div slot="headline">All accounts</div></md-select-option>${raw(db.accounts.rows.map((a) => `<md-select-option value="${a.id}" ${a.id === f.acc ? 'selected' : ''}><div slot="headline">${escapeHtml(a.display_name)}</div></md-select-option>`).join(''))}</md-outlined-select>
+      <md-outlined-select name="cat"><md-select-option value="all" ${!f.cat ? 'selected' : ''}><div slot="headline">All categories</div></md-select-option><md-select-option value="uncategorized" ${f.cat === 'uncategorized' ? 'selected' : ''}><div slot="headline">uncategorized</div></md-select-option>${raw(categoryNames().map((c) => `<md-select-option value="${c}" ${c === f.cat ? 'selected' : ''}><div slot="headline">${catLabel(c)}</div></md-select-option>`).join(''))}</md-outlined-select>
+      <md-outlined-select name="status"><md-select-option value="all" ${!f.status ? 'selected' : ''}><div slot="headline">Any status</div></md-select-option>${raw(['confirmed', 'provisional', 'needs_review', 'unmatched'].map((s) => `<md-select-option value="${s}" ${s === f.status ? 'selected' : ''}><div slot="headline">${s.replace('_', ' ')}</div></md-select-option>`).join(''))}<md-select-option value="superseded" ${f.status === 'superseded' ? 'selected' : ''}><div slot="headline">hidden (duplicates / merged)</div></md-select-option></md-outlined-select>
+      <md-outlined-text-field name="q" placeholder="Search narration / amount" value="${f.q}" ></md-outlined-text-field>
+      <md-outlined-button data-action="add">+ Manual</md-outlined-button>
     </div>
     <div id="list">${raw(list_())}</div>`;
 }
@@ -125,29 +125,30 @@ async function openTxn(id: string): Promise<void> {
     `<p><strong>${escapeHtml(t.narration)}</strong></p>
      <p class="muted small">${t.posted_at} · ${escapeHtml(acc?.display_name ?? t.account_hint)} · ${t.direction} ${money(t.amount_paise)}${t.ref_no ? ` · ref ${escapeHtml(t.ref_no)}` : ''}<br/>
      source ${t.source} · status ${t.status} · categorized by ${t.categorized_by || '—'}</p>
-     <label class="field">Category <select name="category">${categoryOptions(t.category, categoryNames())}</select></label>
-     <label class="field">Merchant <input name="merchant" value="${escapeHtml(t.merchant)}" /></label>
-     <label class="check"><input type="checkbox" name="rule" /> Also create a rule so similar narrations get this category automatically</label>
-     <label class="field">Rule fragment (must appear in the narration) <input name="pattern" value="${escapeHtml(suggestFragment(t))}" /></label>
-     ${t.status === 'needs_review' || t.status === 'provisional' ? `<label class="check"><input type="radio" name="fix" value="confirm" /> This alert is real (keep it)</label><label class="check"><input type="radio" name="fix" value="dup" /> Duplicate — hide it</label>` : ''}
-     ${t.status === 'confirmed' && t.source !== 'statement' ? `<label class="check"><input type="radio" name="fix" value="dup" /> Hide this row (duplicate / not mine)</label>` : ''}
-     ${t.status === 'superseded' ? `<label class="check"><input type="radio" name="fix" value="restore" /> Restore this row (it was hidden as a duplicate or merged)</label>` : ''}
-     ${t.status === 'unmatched' ? `<label class="field">Attach to account <select name="acc"><option value="">—</option>${db.accounts.rows.map((a) => `<option value="${a.id}">${escapeHtml(a.display_name)}</option>`).join('')}</select></label>` : ''}`,
+     <md-outlined-select class="field" label="Category" name="category">${mdCategoryOptions(t.category, categoryNames())}</md-outlined-select>
+     <md-outlined-text-field class="field" label="Merchant" name="merchant" value="${escapeHtml(t.merchant)}"></md-outlined-text-field>
+     <label class="check"><md-checkbox name="rule" touch-target="wrapper"></md-checkbox> Also create a rule so similar narrations get this category automatically</label>
+     <md-outlined-text-field class="field" label="Rule fragment (must appear in the narration)" name="pattern" value="${escapeHtml(suggestFragment(t))}"></md-outlined-text-field>
+     ${t.status === 'needs_review' || t.status === 'provisional' ? `<label class="check"><md-radio name="fix" value="confirm" touch-target="wrapper"></md-radio> This alert is real (keep it)</label><label class="check"><md-radio name="fix" value="dup" touch-target="wrapper"></md-radio> Duplicate — hide it</label>` : ''}
+     ${t.status === 'confirmed' && t.source !== 'statement' ? `<label class="check"><md-radio name="fix" value="dup" touch-target="wrapper"></md-radio> Hide this row (duplicate / not mine)</label>` : ''}
+     ${t.status === 'superseded' ? `<label class="check"><md-radio name="fix" value="restore" touch-target="wrapper"></md-radio> Restore this row (it was hidden as a duplicate or merged)</label>` : ''}
+     ${t.status === 'unmatched' ? `<md-outlined-select class="field" label="Attach to account" name="acc"><md-select-option value="none" selected><div slot="headline">—</div></md-select-option>${db.accounts.rows.map((a) => `<md-select-option value="${a.id}"><div slot="headline">${escapeHtml(a.display_name)}</div></md-select-option>`).join('')}</md-outlined-select>` : ''}`,
     { title: 'Transaction' },
   );
   if (!r) return;
   const patch: Partial<Transaction> = {};
-  if (r.category !== t.category || r.merchant !== t.merchant) Object.assign(patch, { category: r.category, merchant: r.merchant, categorized_by: 'user' });
+  const newCat = fromNone(r.category);
+  if (newCat !== t.category || r.merchant !== t.merchant) Object.assign(patch, { category: newCat, merchant: r.merchant, categorized_by: 'user' });
   if (r.fix === 'confirm') patch.status = 'confirmed';
   if (r.fix === 'dup') patch.status = 'superseded';
   if (r.fix === 'restore') patch.status = t.source === 'statement' || t.statement_id ? 'confirmed' : 'provisional';
-  if (r.acc) Object.assign(patch, { account_id: r.acc, status: 'provisional' });
+  if (r.acc && r.acc !== 'none') Object.assign(patch, { account_id: r.acc, status: 'provisional' });
   if (Object.keys(patch).length) {
     db.update(db.transactions, t.id, patch);
     await db.flush();
   }
-  if (r.rule && r.category && r.pattern) {
-    const { retagged } = await addRule(r.pattern, r.category, r.merchant ?? '');
+  if (r.rule && newCat && r.pattern) {
+    const { retagged } = await addRule(r.pattern, newCat, r.merchant ?? '');
     toast(`Rule added · ${retagged} transactions retagged`, 'ok');
   } else toast('Saved', 'ok');
 }
@@ -159,12 +160,12 @@ function suggestFragment(t: Transaction): string {
 
 async function addManual(): Promise<void> {
   const r = await modal(
-    `<label class="field">Account <select name="acc">${db.accounts.rows.map((a) => `<option value="${a.id}">${escapeHtml(a.display_name)}</option>`).join('')}</select></label>
-     <label class="field">Date <input type="date" name="date" value="${todayIso()}" required /></label>
-     <label class="field">Amount (₹) <input name="amount" inputmode="decimal" required /></label>
-     <label class="field">Direction <select name="dir"><option value="debit">Spent / debit</option><option value="credit">Received / credit</option></select></label>
-     <label class="field">Description <input name="narration" required /></label>
-     <label class="field">Category <select name="category">${categoryOptions('', categoryNames())}</select></label>`,
+    `<md-outlined-select class="field" label="Account" name="acc">${db.accounts.rows.map((a) => `<md-select-option value="${a.id}"><div slot="headline">${escapeHtml(a.display_name)}</div></md-select-option>`).join('')}</md-outlined-select>
+     <md-outlined-text-field class="field" label="Date" type="date" name="date" value="${todayIso()}" required></md-outlined-text-field>
+     <md-outlined-text-field class="field" label="Amount (₹)" name="amount" inputmode="decimal" required></md-outlined-text-field>
+     <md-outlined-select class="field" label="Direction" name="dir"><md-select-option value="debit"><div slot="headline">Spent / debit</div></md-select-option><md-select-option value="credit"><div slot="headline">Received / credit</div></md-select-option></md-outlined-select>
+     <md-outlined-text-field class="field" label="Description" name="narration" required></md-outlined-text-field>
+     <md-outlined-select class="field" label="Category" name="category">${mdCategoryOptions('', categoryNames())}</md-outlined-select>`,
     { title: 'Manual transaction', submit: 'Add' },
   );
   if (!r) return;
@@ -172,7 +173,7 @@ async function addManual(): Promise<void> {
   const amount = Math.abs(parseAmountToPaise(r.amount!));
   const fp = txnFingerprint({ accountId: r.acc!, postedAt: r.date!, direction: r.dir as 'debit', amountPaise: amount, narration: r.narration, refNo: `MANUAL${Date.now()}` });
   await db.append(db.transactions, [
-    { id: `t_${fp.slice(0, 20)}`, account_id: r.acc!, account_hint: '', posted_at: r.date!, amount_paise: amount, direction: r.dir as 'debit', narration: r.narration!, ref_no: '', category: r.category ?? '', merchant: '', categorized_by: r.category ? 'user' : '', source: 'manual', status: 'confirmed', email_id: '', statement_id: '', created_at: stamp() },
+    { id: `t_${fp.slice(0, 20)}`, account_id: r.acc!, account_hint: '', posted_at: r.date!, amount_paise: amount, direction: r.dir as 'debit', narration: r.narration!, ref_no: '', category: fromNone(r.category), merchant: '', categorized_by: fromNone(r.category) ? 'user' : '', source: 'manual', status: 'confirmed', email_id: '', statement_id: '', created_at: stamp() },
   ]);
   toast('Added', 'ok');
 }
