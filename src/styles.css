@@ -256,3 +256,4 @@ a.list-item:hover { background: var(--md-surface-container-low); margin: 0 -1.12
 .install-bar { display: flex; align-items: center; gap: .6rem; padding: .6rem 1rem; background: var(--md-primary-container); color: var(--md-on-primary-container); font-size: .8125rem; }
 .install-bar span { flex: 1; }
 .install-bar .btn.primary { background: var(--md-primary); color: var(--md-on-primary); }
+.update-bar { background: var(--md-tertiary-container); color: var(--md-on-surface); }

@@ -1,6 +1,7 @@
 import './styles.css';
 import { registerSW } from 'virtual:pwa-register';
 import { consumeRedirect } from './google/auth';
+import { onSync, syncState } from './core/sync';
 import { route, start, navigate } from './app/router';
 import { toast } from './app/ui';
 import { setupView } from './views/setup';
@@ -12,17 +13,49 @@ import { sourcesView } from './views/sources';
 import { rulesView } from './views/rules';
 import { moreView, settingsView } from './views/settings';
 
+/**
+ * Updates: the service worker is polled every 15 minutes (installed PWAs
+ * otherwise only check on launch). When a new build is ready we reload at
+ * once — unless a sync is running, in which case a banner offers the update
+ * and it applies when the user taps it or the sync ends.
+ */
+let updateReady = false;
 const updateSW = registerSW({
   immediate: true,
   onRegisteredSW(_url, registration) {
-    // Installed PWAs only check for a new service worker on launch; poll too.
-    if (registration) setInterval(() => registration.update().catch(() => {}), 15 * 60 * 1000);
+    if (registration) {
+      setInterval(() => registration.update().catch(() => {}), 15 * 60 * 1000);
+      (window as unknown as { paisabookCheckUpdate: () => Promise<boolean> }).paisabookCheckUpdate = async () => {
+        await registration.update();
+        return !!(registration.installing || registration.waiting) || updateReady;
+      };
+    }
   },
   onNeedRefresh() {
-    toast('Update available — reloading…');
-    setTimeout(() => void updateSW(true), 1200);
+    updateReady = true;
+    document.dispatchEvent(new Event('paisabook:update-ready'));
+    if (!syncState.running) {
+      toast('New version ready — restarting…');
+      setTimeout(() => void updateSW(true), 1200);
+    } else {
+      toast('New version ready — it will apply after the sync');
+      const off = onSync(() => {
+        if (!syncState.running) {
+          off();
+          setTimeout(() => void updateSW(true), 1500);
+        }
+      });
+    }
   },
 });
+export function isUpdateReady(): boolean {
+  return updateReady;
+}
+export function applyUpdate(): void {
+  void updateSW(true);
+}
+(window as unknown as { paisabookApplyUpdate: () => void; paisabookUpdateReady: () => boolean }).paisabookApplyUpdate = applyUpdate;
+(window as unknown as { paisabookApplyUpdate: () => void; paisabookUpdateReady: () => boolean }).paisabookUpdateReady = isUpdateReady;
 
 /**
  * Install prompt: Chrome/Edge/Android fire `beforeinstallprompt`; we keep the

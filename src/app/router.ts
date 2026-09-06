@@ -59,6 +59,7 @@ export async function renderCurrent(): Promise<void> {
   cleanup = undefined;
   app.innerHTML = shell(path, view);
   wireInstallBar();
+  app.querySelector('[data-apply-update]')?.addEventListener('click', () => wu.paisabookApplyUpdate?.());
   const main = app.querySelector<HTMLElement>('#view')!;
   if (view.requiresDb !== false && s.setupDone) {
     if (!hasValidToken()) {
@@ -98,6 +99,21 @@ function updateSyncBadge(): void {
 const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || (navigator as unknown as { standalone?: boolean }).standalone === true;
 const isIos = () => /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as unknown as { MSStream?: unknown }).MSStream;
 const w = window as unknown as { paisabookInstall?: () => Promise<boolean>; paisabookCanInstall?: () => boolean };
+
+const wu = window as unknown as { paisabookUpdateReady?: () => boolean; paisabookApplyUpdate?: () => void };
+
+/** A new build is downloaded and waiting: offer it without forcing a reload mid-sync. */
+function updateBar(): string {
+  if (!wu.paisabookUpdateReady?.()) return '';
+  return `<div class="install-bar update-bar"><span>A new version of PaisaBook is ready.</span><button class="btn small primary" data-apply-update>Update now</button></div>`;
+}
+document.addEventListener('paisabook:update-ready', () => {
+  const slot = document.getElementById('update-slot');
+  if (slot) {
+    slot.innerHTML = updateBar();
+    slot.querySelector('[data-apply-update]')?.addEventListener('click', () => wu.paisabookApplyUpdate?.());
+  }
+});
 
 /** Offer installation from the very first screen; dismissable per device. */
 function installBar(): string {
@@ -150,6 +166,7 @@ function shell(path: string, view: View): string {
       <span class="topbar-title">${view.title}</span>
       ${db.loaded ? raw(`<a class="sheet-link" href="${db.sheetUrl()}" target="_blank" rel="noopener" title="Open the Google Sheet">Sheet ↗</a>`) : ''}
     </header>
+    <div id="update-slot">${raw(updateBar())}</div>
     <div id="install-slot">${raw(installBar())}</div>
     <main id="view"></main>
     <nav class="tabbar">

@@ -1,5 +1,5 @@
 import type { View } from '../app/router';
-import { html, raw, onAction, toast, modal, confirmDialog, downloadText } from '../app/ui';
+import { html, raw, onAction, toast, modal, confirmDialog, downloadText, spinner } from '../app/ui';
 import { db, newId, stamp } from '../store/db';
 import { settings, saveSettings, resetDevice } from '../store/local';
 import { signOut, redirectUri, hasValidToken, startSignIn } from '../google/auth';
@@ -18,16 +18,38 @@ export const moreView: View = {
         <a class="list-item" href="#/settings"><div class="grow"><div class="title">Settings</div><div class="sub">Keys, models, family, sheet, sign-out</div></div>›</a>
         ${db.loaded ? raw(`<a class="list-item" href="${db.sheetUrl()}" target="_blank" rel="noopener"><div class="grow"><div class="title">Open the Google Sheet ↗</div><div class="sub">Your data, in your Drive</div></div></a>`) : ''}
       </div>
-      <p class="muted small center">PaisaBook · open source · <a href="https://github.com/kumarranjansingh19-code/paisabook" target="_blank" rel="noopener">source</a> · build ${__BUILD__}</p>
-      <p class="center"><button class="btn small" data-action="update">Check for updates</button> <button class="btn small ghost" data-action="hard-refresh">Clear cache & reload</button></p>`;
+      <div class="card">
+        <h3>App</h3>
+        <p class="small muted">Build <code>${__BUILD__}</code>. New builds are checked for every 15 minutes and on launch; updates apply automatically, or after a running sync finishes.</p>
+        <div class="row">
+          <button class="btn primary small" data-action="update">Check for updates</button>
+          <button class="btn small ghost" data-action="hard-refresh">Clear cache & reinstall</button>
+        </div>
+        <div id="update-status" class="small" style="margin-top:.5rem"></div>
+      </div>
+      <p class="muted small center">PaisaBook · open source · <a href="https://github.com/kumarranjansingh19-code/paisabook" target="_blank" rel="noopener">source</a></p>`;
     onAction(root, {
-      update: async () => {
-        const reg = await navigator.serviceWorker?.getRegistration();
-        if (!reg) return toast('No service worker (dev mode)');
-        await reg.update();
-        if (reg.installing || reg.waiting) toast('Update found — it will reload in a moment', 'ok');
-        else toast('Already on the latest build', 'ok');
+      update: async (el) => {
+        const status = root.querySelector('#update-status')!;
+        const w = window as unknown as { paisabookCheckUpdate?: () => Promise<boolean>; paisabookApplyUpdate?: () => void };
+        if (!w.paisabookCheckUpdate) {
+          status.textContent = 'No service worker here (dev mode) — updates apply on the installed app.';
+          return;
+        }
+        el.setAttribute('disabled', '');
+        status.innerHTML = spinner('Checking…');
+        try {
+          const found = await w.paisabookCheckUpdate();
+          status.innerHTML = found
+            ? `<span class="pill ok">Update found</span> <button class="btn small primary" data-action="apply-update">Install & restart</button>`
+            : `<span class="pill ok">You're on the latest build</span>`;
+        } catch (err) {
+          status.innerHTML = `<span class="pill bad">${escapeHtml(String((err as Error).message))}</span>`;
+        } finally {
+          el.removeAttribute('disabled');
+        }
       },
+      'apply-update': () => (window as unknown as { paisabookApplyUpdate?: () => void }).paisabookApplyUpdate?.(),
       'hard-refresh': () => (window as unknown as { paisabookClearCaches: () => Promise<void> }).paisabookClearCaches(),
     });
   },
