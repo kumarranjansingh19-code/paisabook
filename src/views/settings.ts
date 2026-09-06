@@ -12,6 +12,7 @@ export const moreView: View = {
   requiresDb: false,
   render(root) {
     root.innerHTML = html`
+      ${!settings().setupDone ? raw('<div class="card warn small">Setup isn\'t finished yet — <a href="#/setup">continue the wizard</a> to unlock Home, Ledger, Sync and Accounts.</div>') : ''}
       <div class="card">
         <a class="list-item" href="#/rules"><div class="grow"><div class="title">Categorization rules</div><div class="sub">Deterministic rules, AI suggestions</div></div>›</a>
         <a class="list-item" href="#/sources"><div class="grow"><div class="title">Other sources</div><div class="sub">Import transactions from any Google Sheet</div></div>›</a>

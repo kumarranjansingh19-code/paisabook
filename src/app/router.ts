@@ -50,11 +50,12 @@ export async function renderCurrent(): Promise<void> {
   const app = document.getElementById('app')!;
   const { path, params } = currentPath();
   const s = settings();
-  if (!s.setupDone && path !== '/setup') {
+  const view = routes.get(path) ?? routes.get('/')!;
+  // Until setup is done only the data screens redirect to the wizard; More and Settings stay reachable.
+  if (!s.setupDone && path !== '/setup' && view.requiresDb !== false) {
     navigate('/setup');
     return;
   }
-  const view = routes.get(path) ?? routes.get('/')!;
   if (typeof cleanup === 'function') cleanup();
   cleanup = undefined;
   app.innerHTML = shell(path, view);
