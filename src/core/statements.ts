@@ -10,6 +10,7 @@ import { sha256HexAsync } from './hash';
 import { settings, saveSettings } from '../store/local';
 import { downloadAttachment } from '../google/gmail';
 import { getCachedExtract, putCachedExtract } from '../store/mailcache';
+import { passwordCandidates } from './pwguess';
 
 export interface PendingPdf {
   /** stable id = sha256 of the bytes */
@@ -44,7 +45,7 @@ export async function shaOf(data: Uint8Array): Promise<string> {
  * Try every password we know (device store) plus an explicit one. The account
  * whose password opens the file is a strong ownership hint.
  */
-async function openPdf(data: Uint8Array, explicit?: string | null): Promise<{ text: string; account: Account | null }> {
+async function openPdf(data: Uint8Array, explicit?: string | null, hint?: string | null, cardLast4 = ''): Promise<{ text: string; account: Account | null }> {
   try {
     return { text: await extractPdfText(data, null), account: null };
   } catch (err) {
@@ -65,8 +66,24 @@ async function openPdf(data: Uint8Array, explicit?: string | null): Promise<{ te
       if (!(err instanceof PdfPasswordError)) throw err;
     }
   }
+  // Then the recipes banks use, built from the device-only facts the user gave (DOB, PAN, mobile, name).
+  const recipe = settings().pwRecipe;
+  if (recipe && (recipe.dob || recipe.pan || recipe.mobile || recipe.name)) {
+    for (const pw of passwordCandidates(recipe, hint ?? '', cardLast4)) {
+      if (tried.has(pw)) continue;
+      tried.add(pw);
+      try {
+        const text = await extractPdfText(data, pw);
+        guessedPassword = pw;
+        return { text, account: null };
+      } catch (err) {
+        if (!(err instanceof PdfPasswordError)) throw err;
+      }
+    }
+  }
   throw new PdfPasswordError();
 }
+let guessedPassword = '';
 
 /**
  * Idempotent statement import: sha gate → open → LLM extraction → validate →
@@ -98,8 +115,9 @@ export async function importStatement(
   }
   let text: string;
   let passwordAccount: Account | null;
+  guessedPassword = '';
   try {
-    ({ text, account: passwordAccount } = await openPdf(pdf.data, opts.password));
+    ({ text, account: passwordAccount } = await openPdf(pdf.data, opts.password, pdf.hint, pdf.subject.match(/\d{4}\b/)?.[0] ?? ''));
   } catch (err) {
     if (err instanceof PdfPasswordError) return { status: 'needs_password', hint: pdf.hint };
     return { status: 'failed', reason: String(err) };
@@ -150,9 +168,11 @@ export async function importStatement(
   }
   if (!account) return { status: 'needs_account', hint, institution: extract.institution };
 
-  // Remember the password on this device only if asked.
+  // Remember the password on this device only if asked — and a guessed one for the account it opened.
   if (opts.password && opts.rememberFor) {
     saveSettings({ passwords: { ...settings().passwords, [opts.rememberFor]: opts.password } });
+  } else if (guessedPassword && !settings().passwords[account.id]) {
+    saveSettings({ passwords: { ...settings().passwords, [account.id]: guessedPassword } });
   }
   // Learn masked numbers we haven't seen for this account.
   const newRefs = (extract.account_hint.match(/\d{4,}/g) ?? []).map((d) => d.slice(-4)).filter((l4) => !account.account_ref.includes(l4));

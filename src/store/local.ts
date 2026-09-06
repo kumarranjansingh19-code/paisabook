@@ -15,6 +15,8 @@ export interface DeviceSettings {
   readMode: 'accurate' | 'economy';
   /** account id → statement PDF password (remembered only if the user ticks "remember") */
   passwords: Record<string, string>;
+  /** device-only facts banks build statement passwords from; the app tries the usual recipes before asking */
+  pwRecipe: { dob: string; pan: string; mobile: string; name: string };
   setupDone: boolean;
 }
 
@@ -31,6 +33,7 @@ export const DEFAULTS: DeviceSettings = {
   gmailExtraQuery: '',
   readMode: 'accurate',
   passwords: {},
+  pwRecipe: { dob: '', pan: '', mobile: '', name: '' },
   setupDone: false,
 };
 

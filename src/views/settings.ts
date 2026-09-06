@@ -3,6 +3,7 @@ import { html, raw, onAction, toast, modal, confirmDialog, downloadText, spinner
 import { db, newId, stamp, type Category } from '../store/db';
 import { addCategory, categories } from '../core/categories';
 import { cacheStats, clearMailCache } from '../store/mailcache';
+import { importWithNewPassword } from '../core/sync';
 import { settings, saveSettings, resetDevice } from '../store/local';
 import { signOut, redirectUri, hasValidToken, startSignIn } from '../google/auth';
 import { escapeHtml } from '../core/text';
@@ -114,6 +115,15 @@ export const settingsView: View = {
         location.reload();
       },
       'change-sheet': () => navigate('/setup?step=sheet'),
+      'save-recipe': async (el) => {
+        const v = (n: string) => root.querySelector<HTMLInputElement>(`[name=${n}]`)!.value.trim();
+        saveSettings({ pwRecipe: { dob: v('pwDob'), pan: v('pwPan').toUpperCase(), mobile: v('pwMobile'), name: v('pwName') } });
+        el.setAttribute('disabled', '');
+        toast('Saved on this device — trying waiting statements…');
+        const { imported, remaining } = await importWithNewPassword();
+        toast(imported ? `${imported} statement${imported > 1 ? 's' : ''} opened${remaining ? `, ${remaining} still waiting` : ''}` : remaining ? `Saved. ${remaining} PDF${remaining > 1 ? 's' : ''} still need a password` : 'Saved', 'ok');
+        el.removeAttribute('disabled');
+      },
       'clear-mail-cache': async () => {
         const stats = await cacheStats();
         if (!(await confirmDialog(`Clear ${stats.emails} cached emails and their AI readings from this device? The sheet is untouched; the next sync re-downloads and re-reads them (costs Gmail quota and AI calls).`, 'Clear'))) return;
@@ -169,6 +179,19 @@ function page(): string {
       <div class="row between"><h3>Family</h3><button class="btn small" data-action="add-family">+ Add</button></div>
       <p class="small muted">Names help the AI tag transfers to family as <em>family transfer</em> instead of spending.</p>
       ${db.family.rows.length ? raw(db.family.rows.map((f) => `<div class="list-item"><div class="grow">${escapeHtml(f.name)} <span class="muted small">${escapeHtml(f.relation)}</span></div><button class="btn small ghost" data-action="del-family" data-id="${f.id}">✕</button></div>`).join('')) : ''}
+    </div>
+    <div class="card">
+      <h3>Statement passwords: let the app guess</h3>
+      <p class="small muted">Banks build PDF passwords from these (and say which in the email). Stored only on this device; the app tries the usual recipes before asking you, and remembers the one that works per account.</p>
+      <div class="row">
+        <label class="field grow">Date of birth <input type="date" name="pwDob" value="${s.pwRecipe?.dob ?? ''}" /></label>
+        <label class="field grow">PAN <input name="pwPan" value="${s.pwRecipe?.pan ?? ''}" autocapitalize="characters" autocomplete="off" placeholder="ABCDE1234F" /></label>
+      </div>
+      <div class="row">
+        <label class="field grow">Mobile <input name="pwMobile" inputmode="numeric" value="${s.pwRecipe?.mobile ?? ''}" autocomplete="off" /></label>
+        <label class="field grow">Name as on the account <input name="pwName" value="${s.pwRecipe?.name ?? ''}" autocomplete="off" /></label>
+      </div>
+      <button class="btn primary small" data-action="save-recipe">Save & try waiting statements</button>
     </div>
     <div class="card">
       <div class="row between"><h3>Categories</h3><button class="btn small" data-action="add-category">+ Add</button></div>
