@@ -1,7 +1,7 @@
 import type { View } from '../app/router';
 import { html, raw, money, onAction, categoryOptions, mdCategoryOptions, fromNone, catLabel, modal, toast } from '../app/ui';
 import { db, type Transaction } from '../store/db';
-import { categoryNames } from '../core/categories';
+import { categoryKind, categoryNames } from '../core/categories';
 import { setCategory, addRule } from '../core/categorize';
 import { availableMonths } from '../core/analytics';
 import { monthLabel, monthOf, todayIso } from '../core/dates';
@@ -16,12 +16,18 @@ interface Filter {
   acc: string;
   status: string;
   q: string;
+  /** income | spend | investment | transfer | refund — set by the Home stat cards */
+  kind: string;
 }
-const f: Filter = { m: monthOf(todayIso()), cat: '', acc: '', status: '', q: '' };
+const DEFAULTS = (): Filter => ({ m: monthOf(todayIso()), cat: '', acc: '', status: '', q: '', kind: '' });
+const f: Filter = DEFAULTS();
 
 export const transactionsView: View = {
   title: 'Ledger',
   render(root, params) {
+    // A link from Home names exactly what to show: start from clean filters so an
+    // account/status/search left over from an earlier visit can't hide rows.
+    if ([...params.keys()].length) Object.assign(f, DEFAULTS());
     for (const k of Object.keys(f) as Array<keyof Filter>) if (params.has(k)) f[k] = params.get(k)!;
     if (params.has('m') && params.get('m') === 'all') f.m = '';
     const draw = () => {
@@ -65,7 +71,8 @@ function filtered(): Transaction[] {
     .filter((t) => (f.cat ? (f.cat === 'uncategorized' ? !t.category : t.category === f.cat) : true))
     .filter((t) => (f.acc ? t.account_id === f.acc : true))
     .filter((t) => (f.status ? t.status === f.status : true))
-    .filter((t) => (q ? `${t.narration} ${t.merchant} ${t.ref_no} ${t.amount_paise / 100}`.toLowerCase().includes(q) : true))
+    .filter((t) => (f.kind ? !!t.category && categoryKind(t.category) === f.kind : true))
+    .filter((t) => (q ? `${t.narration} ${t.merchant} ${t.ref_no} ${t.amount_paise / 100} ${t.category} ${catLabel(t.category)} ${db.accounts.get(t.account_id)?.display_name ?? ''}`.toLowerCase().includes(q) : true))
     .sort((a, b) => (a.posted_at < b.posted_at ? 1 : a.posted_at > b.posted_at ? -1 : 0));
 }
 
@@ -77,9 +84,10 @@ function page(): string {
       <md-outlined-select name="acc"><md-select-option value="all" ${!f.acc ? 'selected' : ''}><div slot="headline">All accounts</div></md-select-option>${raw(db.accounts.rows.map((a) => `<md-select-option value="${a.id}" ${a.id === f.acc ? 'selected' : ''}><div slot="headline">${escapeHtml(a.display_name)}</div></md-select-option>`).join(''))}</md-outlined-select>
       <md-outlined-select name="cat"><md-select-option value="all" ${!f.cat ? 'selected' : ''}><div slot="headline">All categories</div></md-select-option><md-select-option value="uncategorized" ${f.cat === 'uncategorized' ? 'selected' : ''}><div slot="headline">uncategorized</div></md-select-option>${raw(categoryNames().map((c) => `<md-select-option value="${c}" ${c === f.cat ? 'selected' : ''}><div slot="headline">${catLabel(c)}</div></md-select-option>`).join(''))}</md-outlined-select>
       <md-outlined-select name="status"><md-select-option value="all" ${!f.status ? 'selected' : ''}><div slot="headline">Any status</div></md-select-option>${raw(['confirmed', 'provisional', 'needs_review', 'unmatched'].map((s) => `<md-select-option value="${s}" ${s === f.status ? 'selected' : ''}><div slot="headline">${s.replace('_', ' ')}</div></md-select-option>`).join(''))}<md-select-option value="superseded" ${f.status === 'superseded' ? 'selected' : ''}><div slot="headline">hidden (duplicates / merged)</div></md-select-option></md-outlined-select>
-      <md-outlined-text-field name="q" placeholder="Search narration / amount" value="${f.q}" ></md-outlined-text-field>
+      <md-outlined-text-field name="q" placeholder="Search narration / amount / category" value="${f.q}" ></md-outlined-text-field>
       <md-outlined-button data-action="add">+ Manual</md-outlined-button>
     </div>
+    ${f.kind ? raw(`<p class="small muted">Showing <strong>${escapeHtml(f.kind)}</strong> categories only · <a href="#/txns?m=${encodeURIComponent(f.m || 'all')}">show everything</a></p>`) : ''}
     <div id="list">${raw(list_())}</div>`;
 }
 

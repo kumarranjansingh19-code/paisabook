@@ -99,12 +99,12 @@ function page(): string {
     ${syncState.running ? raw(`<p class="small muted">${escape(syncState.phase)}${syncState.progress?.total ? ` ${syncState.progress.done}/${syncState.progress.total}` : ''}${syncState.progress?.note ? ` · ${escape(syncState.progress.note)}` : ''} — <a href="#/sync">details</a></p>`) : raw(lastSyncLine())}
     ${!months.includes(month) ? raw('<p class="muted center small">No transactions in this month yet.</p>') : ''}
     <div class="grid">
-      <div class="stat"><div class="label">Real spend</div><div class="value">${money(spend, true)}</div>
+      <div class="stat clickable" onclick="location.hash='#/txns?m=${month}&kind=spend'" title="Open these rows in the Ledger"><div class="label">Real spend</div><div class="value">${money(spend, true)}</div>
         <div class="sub">${settle.settled ? raw('<span class="pill ok">✓ settled</span>') : raw(`<span class="pill warn" title="${settle.awaiting.map(escape).join(', ')}">⏳ ${settle.awaiting.length} pending</span>`)}
         ${prevFlow ? raw(`<span class="muted"> · ${delta(spend, prevFlow.spent_paise)} vs last month</span>`) : ''}</div></div>
-      <div class="stat"><div class="label">Income</div><div class="value">${money(thisFlow?.income_paise ?? 0, true)}</div><div class="sub">${thisFlow?.salary_paise ? `salary ${money(thisFlow.salary_paise, true)}` : 'into bank accounts'}</div></div>
-      <div class="stat"><div class="label">Invested</div><div class="value">${money(thisFlow?.invested_paise ?? 0, true)}</div><div class="sub">family ${money(thisFlow?.family_paise ?? 0, true)}</div></div>
-      <div class="stat ${(thisFlow?.net_paise ?? 0) >= 0 ? 'good' : 'bad'}"><div class="label">Net</div><div class="value">${money(thisFlow?.net_paise ?? 0, true)}</div><div class="sub">cash ${money(thisFlow?.cash_net_paise ?? 0, true)} · card bills ${money(thisFlow?.cc_payment_paise ?? 0, true)}</div></div>
+      <div class="stat clickable" onclick="location.hash='#/txns?m=${month}&kind=income'" title="Open these rows in the Ledger"><div class="label">Income</div><div class="value">${money(thisFlow?.income_paise ?? 0, true)}</div><div class="sub">${thisFlow?.salary_paise ? `salary ${money(thisFlow.salary_paise, true)}` : 'into bank accounts'}</div></div>
+      <div class="stat clickable" onclick="location.hash='#/txns?m=${month}&kind=investment'" title="Open these rows in the Ledger"><div class="label">Invested</div><div class="value">${money(thisFlow?.invested_paise ?? 0, true)}</div><div class="sub"><a href="#/txns?m=${month}&cat=family_transfer" onclick="event.stopPropagation()">family ${money(thisFlow?.family_paise ?? 0, true)}</a></div></div>
+      <div class="stat ${(thisFlow?.net_paise ?? 0) >= 0 ? 'good' : 'bad'}"><div class="label">Net</div><div class="value">${money(thisFlow?.net_paise ?? 0, true)}</div><div class="sub">cash ${money(thisFlow?.cash_net_paise ?? 0, true)} · <a href="#/txns?m=${month}&cat=cc_payment">card bills ${money(thisFlow?.cc_payment_paise ?? 0, true)}</a></div></div>
     </div>
 
     ${!settle.settled
