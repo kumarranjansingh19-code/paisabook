@@ -10,7 +10,8 @@ import { matchAccount } from './accounts';
 import { parseAmountToPaise } from './money';
 import { recordAlert } from './reconcile';
 import { recordBillNotice, shaOf, type PendingPdf } from './statements';
-import { detectStatement, parseAlert, parseBill } from './heuristics';
+import { detectStatement, parseAlert, parseBill, type HeuristicAlert } from './heuristics';
+import { isJunkNarration } from './reconcile';
 import { getCachedEmails, getCachedMetas, putCachedEmails, putCachedMetas } from '../store/mailcache';
 
 /** Cheap pre-filter so the LLM only sees plausible financial mail. */
@@ -366,14 +367,26 @@ export async function processEmails(emails: FetchedEmail[], opts: { onProgress?:
     await db.append(db.emails, l);
   };
 
-  // Pass 1 — deterministic readers. Whatever they can't read confidently is queued for the AI.
+  // Pass 1 — deterministic readers. Statements and bill notices are always
+  // theirs (nothing to get wrong). For alerts it depends on the reading mode:
+  //   accurate (default): the AI writes the entry; the parser's reading is kept
+  //     aside to validate the amount and a decisive direction, and as a
+  //     fallback when the AI returns nothing.
+  //   economy: a confident parse IS the entry; the AI only reads the rest.
+  const economy = settings().readMode === 'economy';
   const leftovers: FetchedEmail[] = [];
+  const parsedById = new Map<string, HeuristicAlert>();
   p({ phase: 'Reading emails (rules)', done: 0, total: emails.length });
   for (const e of emails) {
     if (opts.signal?.aborted) throw new DOMException('aborted', 'AbortError');
     const stmt = detectStatement(e);
     const alert = stmt ? null : parseAlert(e);
     const bill = alert ? null : parseBill(e);
+    if (alert && !economy) {
+      parsedById.set(e.id, alert);
+      leftovers.push(e);
+      continue;
+    }
     if (!stmt && !alert && !bill) {
       leftovers.push(e);
       continue;
@@ -387,6 +400,25 @@ export async function processEmails(emails: FetchedEmail[], opts: { onProgress?:
     summary.heuristic++;
   }
   await persist();
+
+  /** Merge the AI's reading with the parser's: the model owns the words, the parser owns the digits. */
+  const reconcileWithParser = (e: FetchedEmail, r: EmailResult | undefined): EmailResult | undefined => {
+    const parsed = parsedById.get(e.id);
+    if (!parsed) return r;
+    if (!r || r.kind !== 'txn_alert' || !r.txn) {
+      summary.heuristic++;
+      return { index: r?.index ?? 0, kind: 'txn_alert', txn: parsed }; // the model saw nothing; the parser was confident
+    }
+    const t = r.txn;
+    const norm = (s: string) => s.replace(/[^\d.]/g, '');
+    if (norm(t.amount) !== norm(parsed.amount)) t.amount = parsed.amount; // digits copied from the mail beat digits typed by a model
+    if (parsed.directionCertain && t.direction !== parsed.direction) t.direction = parsed.direction;
+    if (isJunkNarration(t.narration) && !isJunkNarration(parsed.narration)) t.narration = parsed.narration;
+    if (!t.account_hint && parsed.account_hint) t.account_hint = parsed.account_hint;
+    if (!t.ref_no && parsed.ref_no) t.ref_no = parsed.ref_no;
+    if (!t.date) t.date = parsed.date;
+    return r;
+  };
   p({ phase: 'AI reading emails', done: 0, total: leftovers.length, note: `${summary.heuristic} read by rules` });
 
   // Pass 2 — AI (cheap model), in small batches, persisted after each batch.
@@ -421,7 +453,7 @@ export async function processEmails(emails: FetchedEmail[], opts: { onProgress?:
         const byIndex = new Map(results.map((r) => [r.index, r]));
         for (let i = 0; i < batch.length; i++) {
           const e = batch[i]!;
-          const r = byIndex.get(i);
+          const r = reconcileWithParser(e, byIndex.get(i));
           if (holdBack && (!r || r.kind === 'other') && deservesSecondLook(e)) {
             secondLook.push(e);
             continue;

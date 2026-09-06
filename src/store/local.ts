@@ -11,6 +11,8 @@ export interface DeviceSettings {
   modelReasoning: string;
   spreadsheetId: string;
   gmailExtraQuery: string;
+  /** accurate = the AI writes every alert entry (rules only validate); economy = rules first, AI for the rest */
+  readMode: 'accurate' | 'economy';
   /** account id → statement PDF password (remembered only if the user ticks "remember") */
   passwords: Record<string, string>;
   setupDone: boolean;
@@ -27,6 +29,7 @@ export const DEFAULTS: DeviceSettings = {
   modelReasoning: 'gemini-3.7-flash',
   spreadsheetId: '',
   gmailExtraQuery: '',
+  readMode: 'accurate',
   passwords: {},
   setupDone: false,
 };

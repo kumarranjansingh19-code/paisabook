@@ -67,7 +67,7 @@ export const settingsView: View = {
     onAction(root, {
       'save-keys': async () => {
         const v = (n: string) => root.querySelector<HTMLInputElement>(`[name=${n}]`)!.value.trim();
-        saveSettings({ geminiApiKey: v('geminiApiKey'), modelBulk: v('modelBulk'), modelReasoning: v('modelReasoning'), gmailExtraQuery: v('gmailExtraQuery') });
+        saveSettings({ geminiApiKey: v('geminiApiKey'), modelBulk: v('modelBulk'), modelReasoning: v('modelReasoning'), gmailExtraQuery: v('gmailExtraQuery'), readMode: v('readMode') === 'economy' ? 'economy' : 'accurate' });
         try {
           await testGemini();
           toast('Saved · Gemini OK', 'ok');
@@ -131,6 +131,12 @@ function page(): string {
       <h3>Gemini</h3>
       <label class="field">API key <input name="geminiApiKey" type="password" value="${s.geminiApiKey}" autocomplete="off" /></label>
       <div class="row"><label class="field grow">Bulk model <input name="modelBulk" value="${s.modelBulk}" /></label><label class="field grow">Reasoning model <input name="modelReasoning" value="${s.modelReasoning}" /></label></div>
+      <label class="field">How alerts are read
+        <select name="readMode">
+          <option value="accurate" ${s.readMode !== 'economy' ? 'selected' : ''}>Accurate — the AI writes every entry; rules only double-check amounts</option>
+          <option value="economy" ${s.readMode === 'economy' ? 'selected' : ''}>Economy — rules write what they can, the AI reads the rest (fewer calls)</option>
+        </select>
+      </label>
       <label class="field">Extra Gmail search terms (added to every scan) <input name="gmailExtraQuery" value="${s.gmailExtraQuery}" placeholder='e.g. -from:newsletter@example.com' /></label>
       <button class="btn primary" data-action="save-keys">Save & test</button>
       ${usage.calls ? raw(`<p class="muted small">This session: ${usage.calls} AI calls, ${Math.round(usage.inputTokens / 1000)}k tokens in.</p>`) : ''}

@@ -13,6 +13,8 @@ export interface HeuristicAlert {
   date: string;
   amount: string;
   direction: 'debit' | 'credit';
+  /** true when a decisive phrase settled the direction (card bill paid, "payment received", dividend…) */
+  directionCertain: boolean;
   narration: string;
   ref_no: string;
   institution: string;
@@ -154,7 +156,8 @@ export function parseAlert(e: { from: string; subject: string; bodyText: string;
   };
   let direction: 'debit' | 'credit';
   const billPaid = CARD_BILL_PAID.test(text);
-  if (billPaid || CREDIT_PHRASES.test(win)) direction = 'credit';
+  const directionCertain = billPaid || CREDIT_PHRASES.test(win);
+  if (directionCertain) direction = 'credit';
   else {
     const d = near(DEBIT_WORDS);
     const c = near(CREDIT_WORDS);
@@ -197,7 +200,7 @@ export function parseAlert(e: { from: string; subject: string; bodyText: string;
   }
 
   const ref = REF_RE.exec(text)?.[1] ?? '';
-  return { account_hint, account_kind, date, amount: amount.value, direction, narration: narration.slice(0, 80), ref_no: ref, institution };
+  return { account_hint, account_kind, date, amount: amount.value, direction, directionCertain, narration: narration.slice(0, 80), ref_no: ref, institution };
 }
 
 function daysDiff(a: string, b: string): number {
