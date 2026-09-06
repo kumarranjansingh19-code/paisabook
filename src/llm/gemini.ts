@@ -13,6 +13,7 @@ export interface JsonSchema {
 }
 
 export class LlmError extends Error {
+  retryAfterMs?: number;
   constructor(msg: string, public status?: number) {
     super(msg);
     this.name = 'LlmError';
@@ -53,7 +54,14 @@ async function call(body: unknown, tier: LlmTier, signal?: AbortSignal): Promise
     candidates?: Array<{ content?: { parts?: Array<{ text?: string }> }; finishReason?: string }>;
     usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number };
   };
-  if (!res.ok) throw new LlmError(json.error?.message ?? `Gemini ${res.status}`, res.status);
+  if (!res.ok) {
+    const err = new LlmError(json.error?.message ?? `Gemini ${res.status}`, res.status);
+    // Gemini says how long to wait either in Retry-After or in the message ("retry in 23.5s").
+    const ra = Number(res.headers.get('Retry-After'));
+    const inMsg = /retry (?:in|after) (\d+(?:\.\d+)?)\s*s/i.exec(json.error?.message ?? '');
+    err.retryAfterMs = ra ? ra * 1000 : inMsg ? Number(inMsg[1]) * 1000 : undefined;
+    throw err;
+  }
   usage.calls++;
   usage.inputTokens += json.usageMetadata?.promptTokenCount ?? 0;
   usage.outputTokens += json.usageMetadata?.candidatesTokenCount ?? 0;
@@ -67,7 +75,7 @@ async function call(body: unknown, tier: LlmTier, signal?: AbortSignal): Promise
  * throttling; callers decide what to do with a final failure.
  */
 export async function generateJson<T>(schema: JsonSchema, prompt: string, opts: GenerateOpts): Promise<T> {
-  const maxRetries = opts.maxRetries ?? 2;
+  const maxRetries = opts.maxRetries ?? 5;
   let lastErr: unknown;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
@@ -91,7 +99,19 @@ export async function generateJson<T>(schema: JsonSchema, prompt: string, opts: 
       if (opts.signal?.aborted) throw err;
       const status = (err as LlmError).status;
       if (status && status < 500 && status !== 429) throw err; // bad key, bad schema — retrying won't help
-      if (attempt < maxRetries) await new Promise((r) => setTimeout(r, 2000 * 2 ** attempt));
+      if (attempt < maxRetries) {
+        // Per-minute quotas differ per account/tier: wait what Gemini asks for (capped at 65s), else back off.
+        const asked = (err as LlmError).retryAfterMs;
+        const wait = Math.min(asked ? asked + 500 : Math.min(2000 * 2 ** attempt, 30_000) + Math.random() * 1000, 65_000);
+        if (status === 429 && typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('paisabook:ratelimit', { detail: { status, waitMs: wait, attempt } }));
+        await new Promise((r, rej) => {
+          const t = setTimeout(r, wait);
+          opts.signal?.addEventListener('abort', () => {
+            clearTimeout(t);
+            rej(new DOMException('aborted', 'AbortError'));
+          }, { once: true });
+        });
+      }
     }
   }
   throw new LlmError(`LLM call failed after ${maxRetries + 1} attempts: ${String(lastErr)}`);

@@ -10,6 +10,7 @@ import { matchAccount } from './accounts';
 import { parseAmountToPaise } from './money';
 import { recordAlert } from './reconcile';
 import { recordBillNotice, shaOf, type PendingPdf } from './statements';
+import { detectStatement, parseAlert, parseBill } from './heuristics';
 
 /** Cheap pre-filter so the LLM only sees plausible financial mail. */
 const FIN_WORDS =
@@ -93,26 +94,62 @@ export interface ProcessSummary {
   bills: number;
   pdfs: PendingPdf[];
   llmErrors: number;
+  /** emails read by rules alone (no AI call) */
+  heuristic: number;
+  /** emails the AI had to read */
+  ai: number;
 }
 
+type EmailResult = EmailBatchResult['results'][number];
+
 /**
- * Classify + extract in batches (one LLM call per 12 emails), record alert
- * transactions, bill notices, and collect statement PDFs for the import step.
+ * Rules first, AI for the rest. Every batch is persisted (transactions +
+ * email log) as soon as it's done, so a run cut short by any rate limit
+ * resumes from where it stopped instead of re-reading — and re-paying for —
+ * the same mail.
  */
 export async function processEmails(emails: FetchedEmail[], opts: { onProgress?: (p: ScanProgress) => void; signal?: AbortSignal } = {}): Promise<ProcessSummary> {
   const p = opts.onProgress ?? (() => {});
-  const summary: ProcessSummary = { alerts: 0, duplicates: 0, unmatched: 0, bills: 0, pdfs: [], llmErrors: 0 };
-  const batches = chunk(emails, 12);
-  let done = 0;
-  p({ phase: 'AI reading emails', done: 0, total: emails.length });
+  const summary: ProcessSummary = { alerts: 0, duplicates: 0, unmatched: 0, bills: 0, pdfs: [], llmErrors: 0, heuristic: 0, ai: 0 };
+  const knownSenders = new Set(db.activeAccounts().map((a) => a.statement_sender).filter(Boolean));
   const pendingTxns: Transaction[] = [];
   const logs: EmailLog[] = [];
-  const knownSenders = new Set(db.activeAccounts().map((a) => a.statement_sender).filter(Boolean));
+  const persist = async () => {
+    const txns = pendingTxns.splice(0);
+    const l = logs.splice(0);
+    await db.append(db.transactions, txns);
+    await db.append(db.emails, l);
+  };
 
+  // Pass 1 — deterministic readers. Whatever they can't read confidently is queued for the AI.
+  const leftovers: FetchedEmail[] = [];
+  p({ phase: 'Reading emails (rules)', done: 0, total: emails.length });
+  for (const e of emails) {
+    if (opts.signal?.aborted) throw new DOMException('aborted', 'AbortError');
+    const stmt = detectStatement(e);
+    const alert = stmt ? null : parseAlert(e);
+    const bill = alert ? null : parseBill(e);
+    if (!stmt && !alert && !bill) {
+      leftovers.push(e);
+      continue;
+    }
+    const r: EmailResult = stmt
+      ? { index: 0, kind: stmt, ...(bill ? { bill } : {}) }
+      : alert
+        ? { index: 0, kind: 'txn_alert', txn: alert }
+        : { index: 0, kind: 'cc_bill_notice', bill: bill! };
+    await handleOne(e, r, 'rules');
+    summary.heuristic++;
+  }
+  await persist();
+  p({ phase: 'AI reading emails', done: 0, total: leftovers.length, note: `${summary.heuristic} read by rules` });
+
+  // Pass 2 — AI, in small batches, persisted after each batch.
+  let done = 0;
   await mapPool(
-    batches,
-    3,
-    async (batch) => {
+    chunk(leftovers, 12),
+    2,
+    async (batch, _i, poolSignal) => {
       let results: EmailBatchResult['results'] = [];
       try {
         const r = await generateJson<EmailBatchResult>(
@@ -121,20 +158,34 @@ export async function processEmails(emails: FetchedEmail[], opts: { onProgress?:
             `Long digit runs are masked to the last 4 (XXXX1234) — treat that as the account hint. Amounts must be copied exactly as written. ` +
             `Only bank accounts and credit/debit cards count; wallet/broker/MF/loan mails are 'other'. A card "payment received" credit IS a txn_alert (credit on the card).\n\n` +
             batch.map((e, i) => `--- EMAIL ${i} ---\nFrom: ${e.from}\nSubject: ${e.subject}\nReceived: ${e.receivedAt.slice(0, 10)}\nBody: ${redactPii(e.bodyText.slice(0, 2500))}`).join('\n\n'),
-          { tier: 'bulk', signal: opts.signal },
+          { tier: 'bulk', signal: poolSignal },
         );
         results = r.results;
-      } catch {
+      } catch (err) {
+        if (poolSignal.aborted) throw err;
         summary.llmErrors += batch.length;
         // leave unlogged so the next run retries them
         done += batch.length;
-        p({ phase: 'AI reading emails', done, total: emails.length });
+        p({ phase: 'AI reading emails', done, total: leftovers.length });
         return;
       }
       const byIndex = new Map(results.map((r) => [r.index, r]));
       for (let i = 0; i < batch.length; i++) {
-        const e = batch[i]!;
-        const r = byIndex.get(i);
+        await handleOne(batch[i]!, byIndex.get(i), 'ai');
+        summary.ai++;
+      }
+      done += batch.length;
+      await persist();
+      p({ phase: 'AI reading emails', done, total: leftovers.length, note: `${summary.alerts} alerts, ${summary.pdfs.length} PDFs` });
+    },
+    opts.signal,
+  );
+  await persist();
+  return summary;
+
+  async function handleOne(e: FetchedEmail, r: EmailResult | undefined, via: 'rules' | 'ai'): Promise<void> {
+    {
+      {
         let outcome = 'ignored';
         const kind = r?.kind ?? 'other';
         const isStatementish = kind === 'cc_statement' || kind === 'bank_statement' || knownSenders.has(emailAddress(e.from));
@@ -180,15 +231,8 @@ export async function processEmails(emails: FetchedEmail[], opts: { onProgress?:
             }
           }
         }
-        logs.push({ id: e.id, received_at: e.receivedAt, from: emailAddress(e.from), subject: e.subject.slice(0, 80), kind, outcome, processed_at: stamp() });
+        logs.push({ id: e.id, received_at: e.receivedAt, from: emailAddress(e.from), subject: e.subject.slice(0, 80), kind: `${kind}${via === 'rules' ? ' (rules)' : ''}`, outcome, processed_at: stamp() });
       }
-      done += batch.length;
-      p({ phase: 'AI reading emails', done, total: emails.length, note: `${summary.alerts} alerts, ${summary.pdfs.length} PDFs` });
-    },
-    opts.signal,
-  );
-
-  await db.append(db.transactions, pendingTxns);
-  await db.append(db.emails, logs);
-  return summary;
+    }
+  }
 }

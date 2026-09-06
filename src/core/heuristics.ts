@@ -1,0 +1,236 @@
+/**
+ * Rule-based readers for the formulaic parts of Indian bank mail. Anything
+ * they can't read confidently falls through to Gemini, so these only need to
+ * be precise, not complete. Every function is pure and unit-tested.
+ */
+import type { EmailMeta } from '../google/gmail';
+import { parseLooseDate } from './dates';
+import { emailAddress } from './text';
+
+export interface HeuristicAlert {
+  account_hint: string;
+  account_kind: 'bank' | 'credit_card' | 'unknown';
+  date: string;
+  amount: string;
+  direction: 'debit' | 'credit';
+  narration: string;
+  ref_no: string;
+  institution: string;
+}
+
+/** sender-domain fragment → institution */
+const BANK_DOMAINS: Array<[RegExp, string]> = [
+  [/hdfcbank/i, 'HDFC Bank'],
+  [/icicibank/i, 'ICICI Bank'],
+  [/axisbank/i, 'Axis Bank'],
+  [/sbicard/i, 'SBI Card'],
+  [/sbi\.co\.in|onlinesbi|\bsbi\b/i, 'SBI'],
+  [/kotak/i, 'Kotak Mahindra Bank'],
+  [/yesbank/i, 'YES Bank'],
+  [/idfcfirst|idfcbank/i, 'IDFC FIRST Bank'],
+  [/indusind/i, 'IndusInd Bank'],
+  [/federalbank/i, 'Federal Bank'],
+  [/rblbank/i, 'RBL Bank'],
+  [/americanexpress|amex/i, 'American Express'],
+  [/citi(bank|\.com)/i, 'Citi'],
+  [/hsbc/i, 'HSBC'],
+  [/sc\.com|standardchartered/i, 'Standard Chartered'],
+  [/aubank/i, 'AU Small Finance Bank'],
+  [/bankofbaroda|bobcard/i, 'Bank of Baroda'],
+  [/pnb\.|pnbindia/i, 'Punjab National Bank'],
+  [/canarabank/i, 'Canara Bank'],
+  [/unionbank/i, 'Union Bank of India'],
+  [/onecard|getonecard/i, 'OneCard'],
+  [/sliceit|slice/i, 'Slice'],
+  [/jupiter\.money/i, 'Jupiter'],
+  [/fi\.money|epifi/i, 'Fi'],
+  [/niyo/i, 'Niyo'],
+  [/dbs\.com|dbsbank/i, 'DBS Bank'],
+  [/bandhanbank/i, 'Bandhan Bank'],
+  [/idbi/i, 'IDBI Bank'],
+  [/unionbankofindia/i, 'Union Bank of India'],
+];
+const BANK_NAMES = /\b(HDFC|ICICI|Axis|SBI|Kotak|YES|IDFC(?: FIRST)?|IndusInd|Federal|RBL|American Express|Amex|Citi(?:bank)?|HSBC|Standard Chartered|AU Small Finance|Bank of Baroda|PNB|Canara|Union Bank|OneCard|Slice|Jupiter|Fi|Niyo|DBS|Bandhan|IDBI)\b/i;
+
+export function institutionOf(from: string, text: string): string {
+  const addr = emailAddress(from);
+  for (const [re, name] of BANK_DOMAINS) if (re.test(addr)) return name;
+  const m = BANK_NAMES.exec(`${from} ${text}`);
+  if (!m) return '';
+  const n = m[1]!;
+  if (/^sbi$/i.test(n)) return /sbi card|credit card/i.test(text) ? 'SBI Card' : 'SBI';
+  return /bank$/i.test(n) || /express|citi|hsbc|chartered|onecard|slice|jupiter|niyo|dbs|card/i.test(n) ? n : `${n} Bank`;
+}
+
+const NOT_A_TXN = /\b(OTP|one[- ]time password|declined|unsuccessful|has failed|could not be processed|reversal request|login|password reset|e-?mandate registration|autopay (?:set|registered)|offer|reward points|cashback offer|pre-?approved)\b/i;
+const DEBIT_WORDS = /\b(debited|spent|paid|withdrawn|purchase|payment of|sent|transferred|charged|used for (?:a )?(?:transaction|txn|purchase)|txn of|has been made)\b/i;
+const CREDIT_WORDS = /\b(credited|received|deposited|refund(?:ed)?|reversed|cashback of|credit of)\b/i;
+const AMOUNT_RE = /(?:Rs\.?|INR|₹)\s*(\d[\d,]*(?:\.\d{1,2})?)|(\d[\d,]*(?:\.\d{1,2})?)\s*(?:Rs\.?|INR)\b/gi;
+const BALANCE_CONTEXT = /(?:bal(?:ance)?|limit|lmt|available|avl|avail|outstanding|total due|min(?:imum)? due|due amount)[^\d]{0,25}$/i;
+const LAST4_RE = /(?:a\/c|account|acct|card|ending(?: with| in)?|no\.?|number)\s*[^\d\n]{0,20}?(?:xx+|x\*+|\*+|\.{2,})?\s*(\d{4})\b|\b(?:xx+|\*+)(\d{4})\b/i;
+const DATE_RE = /\b(\d{1,2}[-/][A-Za-z]{3}[-/]\d{2,4}|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}|\d{4}-\d{2}-\d{2}|\d{1,2}(?:st|nd|rd|th)? [A-Za-z]{3,9},? \d{4}|[A-Za-z]{3,9} \d{1,2},? \d{4})\b/;
+const REF_RE = /\b(?:(?:UPI|IMPS|NEFT|RTGS)\s+)?(?:Ref(?:erence)?\s*(?:No|Number|#|ID)?\.?|RRN|UTR|Transaction (?:ID|Ref(?:erence)?)|Txn (?:ID|Ref|No))\s*(?:is|:)?[:\s.-]*(?=[A-Z0-9]*\d)([A-Z0-9]{6,22})\b/i;
+const MODE_RE = /\b(UPI|IMPS|NEFT|RTGS|ATM|POS|ECS|NACH|Auto ?Debit|EMI|Standing Instruction|SI)\b/i;
+const STOP = String.raw`\s+(?:on|via|using|ref|upi|thru|through|from|with|at|to|towards|for|and|\d{1,2}[-/:])\b|\.(?:\s|$)|,|;|\(|\s*$`;
+const NARR_TO = new RegExp(String.raw`\b(?:at|to|towards)\s+(?:VPA\s+)?([A-Za-z][^\n.,;(]{2,60}?)(?=${STOP})`, 'gi');
+const NARR_FROM = new RegExp(String.raw`\bfrom\s+([A-Za-z][^\n.,;(]{2,60}?)(?=${STOP})`, 'gi');
+const NARR_INFO = /\b(?:Info|Remarks?|Description|Narration)[:\s-]+([^\n.]{3,60})/gi;
+const NARR_VPA = /\bVPA\s+([\w.\-]+@[\w]+)/gi;
+const NARR_JUNK = /^(?:(?:your|the|you|this|a|an|transaction|txn|payment|purchase|inr|rs\.?|account|a\/c|card|vpa)\b|\d)/i;
+
+function pickNarration(text: string, direction: 'debit' | 'credit'): string {
+  const order = direction === 'credit' ? [NARR_FROM, NARR_INFO, NARR_TO, NARR_VPA] : [NARR_TO, NARR_VPA, NARR_INFO, NARR_FROM];
+  for (const re of order) {
+    for (const m of text.matchAll(re)) {
+      const cand = m[1]!.trim().replace(/\s+/g, ' ');
+      if (cand.length >= 3 && !NARR_JUNK.test(cand) && !/^\d[\d,.]*$/.test(cand)) return cand.slice(0, 80);
+    }
+  }
+  return '';
+}
+
+/** Strip masked numbers so the amount/date regexes can't latch onto XXXX1234 fragments. */
+function cleanBody(text: string): string {
+  return text.replace(/\s+/g, ' ').slice(0, 3000);
+}
+
+/**
+ * Parse a transaction alert deterministically. Returns null unless amount,
+ * direction, and account hint are all unambiguous — the LLM handles the rest.
+ */
+export function parseAlert(e: { from: string; subject: string; bodyText: string; receivedAt: string }): HeuristicAlert | null {
+  const text = cleanBody(`${e.subject}. ${e.bodyText}`);
+  if (NOT_A_TXN.test(text) && !/\b(debited|credited|spent)\b/i.test(e.subject)) return null;
+
+  // amounts, ignoring balances/limits
+  const amounts: Array<{ value: string; index: number }> = [];
+  for (const m of text.matchAll(AMOUNT_RE)) {
+    const value = (m[1] ?? m[2])!;
+    if (BALANCE_CONTEXT.test(text.slice(Math.max(0, m.index! - 40), m.index!))) continue;
+    if (!/\d/.test(value) || value.replace(/[^\d]/g, '').length < 1) continue;
+    amounts.push({ value, index: m.index! });
+  }
+  const distinct = [...new Set(amounts.map((a) => a.value.replace(/,/g, '')))];
+  if (distinct.length !== 1) return null;
+  const amount = amounts[0]!;
+
+  // direction: word nearest the amount
+  const near = (re: RegExp) => {
+    let best = Infinity;
+    for (const m of text.matchAll(new RegExp(re.source, 'gi'))) best = Math.min(best, Math.abs(m.index! - amount.index));
+    return best;
+  };
+  const d = near(DEBIT_WORDS);
+  const c = near(CREDIT_WORDS);
+  if (d === Infinity && c === Infinity) return null;
+  if (Math.abs(d - c) < 15 && d !== Infinity && c !== Infinity) return null; // "debited … credited" IMPS pair — let the model read it
+  const direction: 'debit' | 'credit' = d <= c ? 'debit' : 'credit';
+
+  // account
+  const institution = institutionOf(e.from, text);
+  const l4 = LAST4_RE.exec(text);
+  const last4 = l4 ? (l4[1] ?? l4[2])! : '';
+  if (!institution && !last4) return null;
+  const isCard = /\b(credit card|debit card|card)\b/i.test(text.slice(Math.max(0, (l4?.index ?? amount.index) - 60), (l4?.index ?? amount.index) + 60));
+  const account_kind: HeuristicAlert['account_kind'] = isCard ? 'credit_card' : /\b(a\/c|account|acct)\b/i.test(text) ? 'bank' : 'unknown';
+  const account_hint = `${institution}${isCard ? ' Credit Card' : account_kind === 'bank' ? ' A/c' : ''}${last4 ? ` XX${last4}` : ''}`.trim();
+
+  // date: first plausible date in text, else the email's own date
+  const received = e.receivedAt.slice(0, 10);
+  let date = received;
+  const dm = DATE_RE.exec(text);
+  if (dm) {
+    const parsed = parseLooseDate(dm[1]!);
+    if (parsed && parsed <= received && daysDiff(parsed, received) <= 35) date = parsed;
+  }
+
+  let narration = pickNarration(text, direction);
+  if (!narration) {
+    // Bank-to-bank transfers name no merchant: fall back to "IMPS A/c XX9999".
+    const mode = MODE_RE.exec(text)?.[1];
+    const others = [...text.matchAll(new RegExp(LAST4_RE.source, 'gi'))].map((m) => (m[1] ?? m[2])!).filter((n) => n !== last4);
+    if (!mode) return null;
+    narration = `${mode.toUpperCase()}${others[0] ? ` A/c XX${others[0]}` : direction === 'debit' ? ' transfer' : ' credit'}`;
+  }
+
+  const ref = REF_RE.exec(text)?.[1] ?? '';
+  return { account_hint, account_kind, date, amount: amount.value, direction, narration: narration.slice(0, 80), ref_no: ref, institution };
+}
+
+function daysDiff(a: string, b: string): number {
+  return Math.abs(Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86400_000;
+}
+
+/** Statement delivery: a PDF from a bank with statement-ish words in the subject or filename. */
+export function detectStatement(e: { from: string; subject: string; attachments: Array<{ filename: string; mimeType: string }> }): 'cc_statement' | 'bank_statement' | null {
+  const pdf = e.attachments.some((a) => /pdf/i.test(a.mimeType) || /\.pdf$/i.test(a.filename));
+  if (!pdf) return null;
+  const text = `${e.subject} ${e.attachments.map((a) => a.filename).join(' ')}`;
+  if (!/\b(statement|e-?statement|stmt)\b/i.test(text)) return null;
+  if (!institutionOf(e.from, text)) return null;
+  return /\b(credit card|card statement|card)\b/i.test(text) ? 'cc_statement' : 'bank_statement';
+}
+
+export interface HeuristicBill {
+  card_hint: string;
+  total_due: string;
+  min_due: string;
+  due_date: string;
+  statement_date: string;
+}
+
+/** Card bill summary in an email body ("Total Amount Due … Payment Due Date …"). */
+export function parseBill(e: { from: string; subject: string; bodyText: string }): HeuristicBill | null {
+  const text = cleanBody(`${e.subject}. ${e.bodyText}`);
+  const total = /total (?:amount )?due[^\d₹R]{0,30}(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d{1,2})?)/i.exec(text)?.[1];
+  const min = /min(?:imum)? (?:amount )?due[^\d₹R]{0,30}(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d{1,2})?)/i.exec(text)?.[1];
+  const dueRaw = /(?:payment )?due (?:date|by|on)[^\d]{0,20}(\d{1,2}[-/ ][A-Za-z]{3}[-/ ,]*\d{2,4}|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}|[A-Za-z]{3,9} \d{1,2},? \d{4})/i.exec(text)?.[1];
+  if (!total || !dueRaw) return null;
+  const institution = institutionOf(e.from, text);
+  const l4 = LAST4_RE.exec(text);
+  const last4 = l4 ? (l4[1] ?? l4[2])! : '';
+  if (!institution && !last4) return null;
+  const stmtRaw = /statement (?:date|dated|generated on)[^\d]{0,20}(\d{1,2}[-/ ][A-Za-z]{3}[-/ ,]*\d{2,4}|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}|[A-Za-z]{3,9} \d{1,2},? \d{4})/i.exec(text)?.[1];
+  return {
+    card_hint: `${institution} Credit Card${last4 ? ` XX${last4}` : ''}`.trim(),
+    total_due: total,
+    min_due: min ?? '',
+    due_date: parseLooseDate(dueRaw) ?? '',
+    statement_date: stmtRaw ? (parseLooseDate(stmtRaw) ?? '') : '',
+  };
+}
+
+export interface HeuristicProposal {
+  kind: 'bank' | 'credit_card';
+  institution: string;
+  last4: string;
+  seen: number;
+  statement_sender: string;
+  example_subject: string;
+}
+
+/** Account discovery from headers + snippets alone: institution from the sender, masked number from the text. */
+export function discoverHeuristically(emails: Array<Pick<EmailMeta, 'from' | 'subject' | 'snippet'> & { bodyText?: string }>): { proposals: HeuristicProposal[]; unresolved: number[] } {
+  const found = new Map<string, HeuristicProposal>();
+  const unresolved: number[] = [];
+  emails.forEach((e, i) => {
+    const text = `${e.subject} ${e.bodyText || e.snippet}`.replace(/\s+/g, ' ');
+    const institution = institutionOf(e.from, text);
+    if (!institution) {
+      if (/\b(debited|credited|statement|a\/c|card)\b/i.test(text)) unresolved.push(i);
+      return;
+    }
+    if (!/\b(debited|credited|spent|statement|e-?statement|transaction|txn|a\/c|account|card|due)\b/i.test(text)) return;
+    const l4 = LAST4_RE.exec(text);
+    const last4 = l4 ? (l4[1] ?? l4[2])! : '';
+    const kind: HeuristicProposal['kind'] = /\bcredit card\b|card statement|\bcard\b/i.test(text) || /card/i.test(institution) ? 'credit_card' : 'bank';
+    const isStatement = /\b(statement|e-?statement)\b/i.test(e.subject);
+    const key = `${institution.toLowerCase()}|${kind}|${last4}`;
+    const cur = found.get(key);
+    if (cur) {
+      cur.seen++;
+      if (!cur.statement_sender && isStatement) cur.statement_sender = emailAddress(e.from);
+    } else found.set(key, { kind, institution, last4, seen: 1, statement_sender: isStatement ? emailAddress(e.from) : '', example_subject: e.subject.slice(0, 70) });
+  });
+  return { proposals: [...found.values()].filter((p) => p.seen >= 2 || p.statement_sender || p.last4).sort((a, b) => b.seen - a.seen), unresolved };
+}

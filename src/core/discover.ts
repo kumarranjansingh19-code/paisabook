@@ -5,6 +5,7 @@ import { db } from '../store/db';
 import { chunk, mapPool } from './pool';
 import { emailAddress, redactPii } from './text';
 import { instKey } from './accounts';
+import { discoverHeuristically } from './heuristics';
 
 export interface AccountProposal {
   kind: 'bank' | 'credit_card';
@@ -18,8 +19,13 @@ export interface AccountProposal {
 /** Propose bank/card accounts from already-fetched emails, deduplicated against registered ones. */
 export async function discoverAccounts(emails: FetchedEmail[], signal?: AbortSignal): Promise<AccountProposal[]> {
   const found = new Map<string, AccountProposal>();
+  // Rules first: known bank senders + masked numbers need no AI at all.
+  const h = discoverHeuristically(emails);
+  for (const p of h.proposals) found.set(`${instKey(p.institution)}|${p.kind}|${p.last4}`, { ...p });
+  // The AI only sees mail from senders the rules couldn't place (capped — this is discovery, not a sync).
+  const forAi = h.unresolved.slice(0, 200).map((i) => emails[i]!);
   await mapPool(
-    chunk(emails, 20),
+    chunk(forAi, 20),
     4,
     async (batch) => {
       const listing = batch

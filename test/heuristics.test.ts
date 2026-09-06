@@ -1,0 +1,60 @@
+import { describe, expect, it } from 'vitest';
+import { detectStatement, discoverHeuristically, parseAlert, parseBill } from '../src/core/heuristics';
+
+const mail = (from: string, subject: string, bodyText: string) => ({ from, subject, bodyText, receivedAt: '2026-08-13T05:00:00.000Z' });
+
+describe('parseAlert', () => {
+  it('reads an HDFC UPI debit', () => {
+    const a = parseAlert(mail('HDFC Bank InstaAlerts <alerts@hdfcbank.net>', 'You have done a UPI txn. Check details!', 'Dear Customer, Rs.450.00 has been debited from account **1234 to VPA swiggy@icici SWIGGY on 12-08-26. Your UPI transaction reference number is 522412345678. If you did not authorize this transaction, call 18002586161.'));
+    expect(a).toMatchObject({ amount: '450.00', direction: 'debit', date: '2026-08-12', account_kind: 'bank', ref_no: '522412345678', institution: 'HDFC Bank' });
+    expect(a!.account_hint).toContain('XX1234');
+    expect(a!.narration.toLowerCase()).toContain('swiggy');
+  });
+  it('reads an ICICI card spend and ignores the available limit', () => {
+    const a = parseAlert(mail('ICICI Bank <credit_cards@icicibank.com>', 'Transaction alert for your ICICI Bank Credit Card', 'Your ICICI Bank Credit Card XX5678 has been used for a transaction of INR 1,299.00 on Aug 12, 2026 at 10:15:30 IST at AMAZON PAY INDIA. The available credit limit on your card is INR 2,50,000.00.'));
+    expect(a).toMatchObject({ amount: '1,299.00', direction: 'debit', account_kind: 'credit_card', date: '2026-08-12' });
+    expect(a!.account_hint).toBe('ICICI Bank Credit Card XX5678');
+    expect(a!.narration).toMatch(/AMAZON PAY INDIA/);
+  });
+  it('reads a Federal NEFT salary credit', () => {
+    const a = parseAlert(mail('Federal Bank <alerts@federalbank.co.in>', 'Credit alert', 'Rs 3,38,000.00 credited to your A/c XX6524 on 01-08-2026 by NEFT from CK 12 SOFTWARE PVT LTD. Ref no N213261234567.'));
+    expect(a).toMatchObject({ amount: '3,38,000.00', direction: 'credit', date: '2026-08-01', account_kind: 'bank', ref_no: 'N213261234567' });
+    expect(a!.narration).toContain('CK 12 SOFTWARE');
+  });
+  it('refuses ambiguous mail (OTP, two amounts, debit+credit pair)', () => {
+    expect(parseAlert(mail('HDFC <a@hdfcbank.net>', 'OTP', 'Your OTP for transaction of Rs 500 at Amazon is 123456. Do not share.'))).toBeNull();
+    expect(parseAlert(mail('Shop <news@shop.com>', 'Sale', 'Get items at Rs 499 and Rs 999 today!'))).toBeNull();
+    expect(parseAlert(mail('Shop <news@shop.com>', 'Sale', 'Everything at Rs 499 today at MyShop.'))).toBeNull(); // no direction word, no account
+  });
+  it('reads an SBI IMPS debit where the beneficiary is also mentioned', () => {
+    const a = parseAlert(mail('SBI <alerts@sbi.co.in>', 'Alert', 'Your A/c X2452 is debited for Rs 2,500.00 on 12/08/26 and A/c XX9999 credited (IMPS Ref no 123456789012).'));
+    expect(a).toMatchObject({ direction: 'debit', amount: '2,500.00', date: '2026-08-12', ref_no: '123456789012' });
+    expect(a!.account_hint).toBe('SBI A/c XX2452');
+  });
+});
+
+describe('detectStatement / parseBill', () => {
+  it('detects card statements by sender + attachment', () => {
+    expect(detectStatement({ from: 'Axis Bank <cc.statements@axisbank.com>', subject: 'Your Axis Bank Credit Card Statement', attachments: [{ filename: 'stmt.pdf', mimeType: 'application/pdf' }] })).toBe('cc_statement');
+    expect(detectStatement({ from: 'Federal Bank <estatement@federalbank.co.in>', subject: 'Account e-Statement for Aug 2026', attachments: [{ filename: 'x.pdf', mimeType: 'application/octet-stream' }] })).toBe('bank_statement');
+    expect(detectStatement({ from: 'Random <a@b.com>', subject: 'invoice', attachments: [{ filename: 'inv.pdf', mimeType: 'application/pdf' }] })).toBeNull();
+  });
+  it('reads a bill notice', () => {
+    const b = parseBill({ from: 'SBI Card <statements@sbicard.com>', subject: 'Your SBI Card statement is ready', bodyText: 'Statement date 05 Aug 2026. Card ending 1987. Total Amount Due: Rs 25,999.00. Minimum Amount Due Rs 1,300.00. Payment Due Date: 25 Aug 2026.' });
+    expect(b).toMatchObject({ total_due: '25,999.00', min_due: '1,300.00', due_date: '2026-08-25', statement_date: '2026-08-05' });
+    expect(b!.card_hint).toBe('SBI Card Credit Card XX1987');
+  });
+});
+
+describe('discoverHeuristically', () => {
+  it('groups by institution, kind and last4', () => {
+    const r = discoverHeuristically([
+      { from: 'alerts@hdfcbank.net', subject: 'UPI txn', snippet: 'Rs.450 debited from account **1234' },
+      { from: 'alerts@hdfcbank.net', subject: 'UPI txn', snippet: 'Rs.50 debited from account **1234' },
+      { from: 'cc.statements@axisbank.com', subject: 'Credit Card Statement', snippet: 'card XX8194 statement attached' },
+      { from: 'news@shop.com', subject: 'Sale', snippet: 'Rs 499 only' },
+    ]);
+    expect(r.proposals.map((p) => `${p.institution}|${p.kind}|${p.last4}|${p.seen}`)).toEqual(['HDFC Bank|bank|1234|2', 'Axis Bank|credit_card|8194|1']);
+    expect(r.proposals[1]!.statement_sender).toBe('cc.statements@axisbank.com');
+  });
+});
