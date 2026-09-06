@@ -125,6 +125,32 @@ export function spinner(label = 'Working…'): string {
   return `<div class="spinner-row"><md-circular-progress indeterminate style="--md-circular-progress-size:22px"></md-circular-progress> ${escapeHtml(label)}</div>`;
 }
 
+/**
+ * Wrap a view's redraw so background data changes (a sync appending rows)
+ * never wipe what the user is typing: while focus is inside a field in
+ * `root`, the redraw is deferred until the field loses focus.
+ */
+export function deferWhileTyping(root: HTMLElement, draw: () => void): () => void {
+  let pending = false;
+  const typing = () => {
+    const a = document.activeElement as HTMLElement | null;
+    return !!a && root.contains(a) && /^(input|textarea|select|md-outlined-text-field|md-outlined-select|md-filled-text-field)$/i.test(a.tagName);
+  };
+  root.addEventListener('focusout', () => {
+    if (!pending) return;
+    setTimeout(() => {
+      if (pending && !typing()) {
+        pending = false;
+        draw();
+      }
+    }, 150);
+  });
+  return () => {
+    if (typing()) pending = true;
+    else draw();
+  };
+}
+
 export function pct(a: number, b: number): number {
   return b ? Math.round((a / b) * 100) : 0;
 }

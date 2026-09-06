@@ -9,7 +9,7 @@ import { categorizeAll } from './categorize';
 import { fetchStatementMails, processEmails, scanMailbox, type ScanProgress } from './extract';
 import { importStatement, type ImportOutcome, type PendingPdf } from './statements';
 import { autoCreateFromUnmatched, rehomeUnmatched } from './accounts';
-import { matchAlertsToStatements } from './reconcile';
+import { dedupeStatementRows, matchAlertsToStatements } from './reconcile';
 import { daysAgoIso, todayIso } from './dates';
 import { usage, usageSnapshot, usageSummary } from '../llm/gemini';
 import { mapPool } from './pool';
@@ -128,6 +128,8 @@ export async function runSync(opts: SyncOptions): Promise<void> {
     await importPending({ force: opts.forceStatements, signal });
     const createdLate = await autoCreateFromUnmatched();
     if (createdLate.length) log(`Accounts created from repeated alerts: ${createdLate.map((a) => a.display_name).join(', ')}`);
+    const twins = await dedupeStatementRows();
+    if (twins) log(`${twins} rows listed by two overlapping statements merged`);
     const paired = await matchAlertsToStatements();
     if (paired) log(`${paired} alerts matched to statement rows`);
 
@@ -321,6 +323,8 @@ export async function fetchStatements(from: string, to: string): Promise<void> {
     await importPending({ signal });
     const rehomed = await rehomeUnmatched();
     if (rehomed) log(`${rehomed} alerts attached to accounts learned from statements`);
+    const twins = await dedupeStatementRows();
+    if (twins) log(`${twins} rows listed by two overlapping statements merged`);
     const paired = await matchAlertsToStatements();
     if (paired) log(`${paired} alerts matched to statement rows`);
     if (syncState.pendingPdfs.length) log(`${syncState.pendingPdfs.length} PDF${syncState.pendingPdfs.length > 1 ? 's' : ''} still waiting for a password or an account (see below)`);
@@ -370,6 +374,7 @@ export async function importWithNewPassword(): Promise<{ imported: number; remai
   await importPending();
   const remaining = syncState.pendingPdfs.length;
   if (before - remaining > 0) {
+    await dedupeStatementRows();
     await matchAlertsToStatements();
     await categorizeAll().catch(() => {});
   }

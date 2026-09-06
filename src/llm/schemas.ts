@@ -92,7 +92,7 @@ export const statementSchema: JsonSchema = {
           date: isoDate("this row's own printed transaction date, converted (statements print DD-MM-YYYY or DD/MM/YY)"),
           amount: str('amount exactly as printed, e.g. "1,23,456.78"'),
           direction: { type: 'string', enum: ['debit', 'credit'] },
-          narration: str('description as printed'),
+          narration: str('description as printed; a description wrapped over two lines (often ending in "-") is one description — join it'),
           ref_no: str('reference / cheque / UPI number if printed, else empty'),
         },
         required: ['date', 'amount', 'direction', 'narration', 'ref_no'],

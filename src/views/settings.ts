@@ -1,5 +1,5 @@
 import type { View } from '../app/router';
-import { html, raw, onAction, toast, modal, confirmDialog, downloadText, spinner } from '../app/ui';
+import { html, raw, onAction, toast, modal, confirmDialog, downloadText, spinner, deferWhileTyping } from '../app/ui';
 import { db, newId, stamp, type Category } from '../store/db';
 import { addCategory, categories } from '../core/categories';
 import { cacheStats, clearMailCache } from '../store/mailcache';
@@ -147,7 +147,7 @@ export const settingsView: View = {
         }
       },
     });
-    return db.onChange(draw);
+    return db.onChange(deferWhileTyping(root, draw));
   },
 };
 

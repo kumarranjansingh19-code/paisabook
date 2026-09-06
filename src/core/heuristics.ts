@@ -67,7 +67,7 @@ export function institutionOf(from: string, text: string): string {
 }
 
 const NOT_A_TXN =
-  /\b(OTP|one[- ]time password|declined|unsuccessful|has failed|could not be processed|reversal request|login|password reset|e-?mandate registration|autopay (?:set|registered)|offer|reward points|cashback offer|pre-?approved|fixed deposit|\bFD\b|term deposit|renew(?:al|ed)?|matur(?:es|ity|ed)|sum (?:assured|insured)|will be (?:debited|credited|deducted)|scheduled|upcoming|reminder|due on)\b/i;
+  /\b(OTP|one[- ]time password|declined|unsuccessful|has failed|order failed|payment failed|transaction failed|not initiated|settlement payout|retention statement|could not be processed|reversal request|login|password reset|e-?mandate registration|autopay (?:set|registered)|offer|reward points|cashback offer|pre-?approved|fixed deposit|\bFD\b|term deposit|renew(?:al|ed)?|matur(?:es|ity|ed)|sum (?:assured|insured)|will be (?:debited|credited|deducted)|scheduled|upcoming|reminder|due on)\b/i;
 const DEBIT_WORDS = /\b(debited|has a debit|debit (?:by|of|for)|spent|paid|withdrawn|purchase|payment of|sent|transferred|charged|used for (?:a )?(?:transaction|txn|purchase)|txn of|has been made)\b/i;
 const CREDIT_WORDS = /\b(credited|has a credit|credit (?:by|of|for)|received|deposited|refund(?:ed)?|reversed|cashback of)\b/i;
 /** Phrases that settle direction outright ("payment of Rs X received" is a credit despite "payment of"). */
@@ -83,8 +83,20 @@ const BALANCE_CONTEXT = /(?:bal(?:ance)?|limit|lmt|available|avl|avail|outstandi
  * A masked account/card number: needs a masking marker (XX1234, **1234, X7310,
  * "ending 1234", "ending with 1234") — never a bare 4-digit number.
  */
-const LAST4_RE = /(?:ending(?: with| in)?|last (?:four|4)(?: digits)?)\s*[:\-]?\s*(?:x+|\*+|•+)?\s*(\d{4,})\b|(?:\b(?:x{1,}|\*{2,}|•{2,})[\s-]?|(?:^|[^A-Za-z0-9])(?:x{1,}|\*{2,}|•{2,})(?:\s?-\s?|\s)?)(\d{4,})\b(?![\d,.]*(?:%|\.\d))/i;
+const LAST4_RE = /(?:ending(?: with| in)?|last (?:four|4)(?: digits)?)\s*[:\-]?\s*(?:x+|\*+|•+)?\s*(\d{4,})\b(?!@)|(?:\b(?:x{1,}|\*{2,}|•{2,})[\s-]?|(?:^|[^A-Za-z0-9])(?:x{1,}|\*{2,}|•{2,})(?:\s?-\s?|\s)?)(\d{4,})\b(?!@)(?![\d,.]*(?:%|\.\d))/i;
 /** The digits after a mask can be longer than 4 (SBI prints XXXXX097310): keep the last four. */
+/**
+ * "XXXX9946@jupiteraxis" is a UPI id, not an account number: a hint built from
+ * it would mint a phantom account. Drop any digits that sit in front of an "@".
+ */
+export function stripVpaDigits(hint: string, text: string): string {
+  const vpa = new Set([...text.matchAll(/(\d{4,})@[\w.]+/g)].map((m) => m[1]!.slice(-4)));
+  let h = hint.replace(/\S+@\S+/g, ' ');
+  for (const d of h.match(/\d{4,}/g) ?? []) {
+    if (vpa.has(d.slice(-4))) h = h.replace(new RegExp(`(?:x+|\\*+|•+)?\\s*${d}`, 'i'), ' ');
+  }
+  return h.replace(/\s+/g, ' ').trim();
+}
 function last4Of(m: RegExpExecArray | RegExpMatchArray | null): string {
   const d = m ? (m[1] ?? m[2] ?? '') : '';
   return d.slice(-4);

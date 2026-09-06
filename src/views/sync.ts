@@ -7,7 +7,8 @@ import { daysAgoIso, todayIso } from '../core/dates';
 import { categorizeAll } from '../core/categorize';
 import { usage } from '../llm/gemini';
 import { learnedSenders, scanCheckpoint } from '../core/extract';
-import { dedupeAlerts, matchAlertsToStatements } from '../core/reconcile';
+import { dedupeAlerts, dedupeStatementRows, matchAlertsToStatements } from '../core/reconcile';
+import { mergeDuplicateAccounts } from '../core/accounts';
 
 let period = defaultPeriod(3);
 
@@ -67,8 +68,11 @@ export const syncView: View = {
       },
       match: async (el) => {
         el.setAttribute('disabled', '');
+        const merged = await mergeDuplicateAccounts();
+        const twins = await dedupeStatementRows();
         const n = await matchAlertsToStatements();
-        toast(n ? `${n} alerts matched to statement rows` : 'Nothing to match', 'ok');
+        const parts = [merged && `${merged} duplicate account${merged > 1 ? 's' : ''} merged`, twins && `${twins} statement twin${twins > 1 ? 's' : ''} hidden`, n && `${n} alerts matched to statement rows`].filter(Boolean);
+        toast(parts.length ? parts.join(' · ') : 'Nothing to match', 'ok');
         el.removeAttribute('disabled');
       },
       dedupe: async (el) => {
@@ -183,7 +187,7 @@ function page(): string {
 
     <details class="card">
       <summary>Maintenance</summary>
-      <div class="list-item"><div class="grow"><div class="title">Match alerts to statements</div><div class="sub">Pairs alert rows with the statement rows for the same purchase and hides the alert. Runs after every sync; use it if you see both.</div></div><md-outlined-button data-small data-action="match">Run</md-outlined-button></div>
+      <div class="list-item"><div class="grow"><div class="title">Tidy duplicates</div><div class="sub">Merges accounts that share a card number, hides rows listed by two overlapping statements, and pairs alert rows with the statement rows for the same purchase. Runs after every sync; use it if you still see twins.</div></div><md-outlined-button data-small data-action="match">Run</md-outlined-button></div>
       <div class="list-item"><div class="grow"><div class="title">Merge duplicate alerts</div><div class="sub">Banks often mail twice about one transaction. New syncs merge these automatically; run once for older rows.</div></div><md-outlined-button data-small data-action="dedupe">Run</md-outlined-button></div>
       <div class="list-item"><div class="grow"><div class="title">Categorize</div><div class="sub">Runs after every sync; use after editing rules. ${db.liveTransactions().filter((t) => !t.category && t.status !== 'unmatched').length} uncategorized now.</div></div><md-outlined-button data-small data-action="categorize">Run</md-outlined-button></div>
     </details>`;

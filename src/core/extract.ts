@@ -10,7 +10,7 @@ import { matchAccount } from './accounts';
 import { parseAmountToPaise } from './money';
 import { recordAlert } from './reconcile';
 import { recordBillNotice, shaOf, type PendingPdf } from './statements';
-import { detectStatement, parseAlert, parseBill, type HeuristicAlert } from './heuristics';
+import { detectStatement, parseAlert, parseBill, type HeuristicAlert, stripVpaDigits } from './heuristics';
 import { isJunkNarration } from './reconcile';
 import { getCachedEmails, getCachedExtracts, getCachedMetas, putCachedEmails, putCachedExtract, putCachedMetas } from '../store/mailcache';
 
@@ -428,7 +428,9 @@ export async function processEmails(emails: FetchedEmail[], opts: { onProgress?:
     `Long digit runs are masked to the last 4 (XXXX1234) — treat that as the account hint. Amounts must be copied exactly as written, every digit. ` +
     `Only bank accounts and credit/debit cards count; wallet/broker/MF/loan mails are 'other'. A card "payment received" / "payment credited" IS a txn_alert with direction credit on the card. ` +
     `Dividend, interest, refund and NEFT/IMPS credits to a bank account are txn_alerts too (registrar mails from KFintech/CAMS/Link Intime announcing a dividend credit name the bank account). ` +
-    `A bill-payment confirmation from CRED / PhonePe / Paytm / a bank ("your credit card bill payment was successful") is a txn_alert with direction credit on THAT CARD (account_hint = the card, not the payer).\n\n`;
+    `A bill-payment confirmation from CRED / PhonePe / Paytm / a bank ("your credit card bill payment was successful") is a txn_alert with direction credit on THAT CARD (account_hint = the card, not the payer). ` +
+    `A UPI id (name@bank, XXXX1234@upi) is NOT an account number: never put its digits in account_hint; if the mail names no account or card, give just the bank/app name. ` +
+    `Failed, declined or "not initiated" orders, broker/MF payout notices (the bank reports that credit itself), reminders and scheduled future debits are 'other'.\n\n`;
   const listing = (batch: FetchedEmail[], chars: number) =>
     batch.map((e, i) => `--- EMAIL ${i} ---\nFrom: ${e.from}\nSubject: ${e.subject}\nReceived: ${e.receivedAt.slice(0, 10)}\nBody: ${redactPii(e.bodyText.slice(0, chars))}`).join('\n\n');
   const secondLook: FetchedEmail[] = [];
@@ -502,6 +504,7 @@ export async function processEmails(emails: FetchedEmail[], opts: { onProgress?:
         if (r?.kind === 'txn_alert' && r.txn) {
           try {
             const amount = Math.abs(parseAmountToPaise(r.txn.amount));
+            r.txn.account_hint = stripVpaDigits(r.txn.account_hint, e.bodyText);
             const acc = matchAccount(r.txn.account_hint, r.txn.account_kind);
             const res = recordAlert(
               { accountId: acc?.id ?? null, accountHint: r.txn.account_hint, postedAt: r.txn.date, amountPaise: amount, direction: r.txn.direction, narration: r.txn.narration, refNo: r.txn.ref_no || null },

@@ -1,5 +1,5 @@
 import type { View } from '../app/router';
-import { html, raw, money, onAction, modal, toast, spinner, confirmDialog } from '../app/ui';
+import { html, raw, money, onAction, modal, toast, spinner, confirmDialog, deferWhileTyping } from '../app/ui';
 import { db, type Account } from '../store/db';
 import { addAccount, deleteAccount, ignoreHint, ignoredHints, rehomeUnmatched, restoreHint, unmatchedHints, updateAccount } from '../core/accounts';
 import { settings, saveSettings } from '../store/local';
@@ -98,7 +98,7 @@ export const accountsView: View = {
         await updateAccount(el.dataset.id!, { is_active: true });
       },
     });
-    return db.onChange(draw);
+    return db.onChange(deferWhileTyping(root, draw));
   },
 };
 

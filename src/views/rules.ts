@@ -1,5 +1,5 @@
 import type { View } from '../app/router';
-import { html, raw, onAction, toast, modal, spinner, mdCategoryOptions, catLabel } from '../app/ui';
+import { html, raw, onAction, toast, modal, spinner, mdCategoryOptions, catLabel, deferWhileTyping } from '../app/ui';
 import { db } from '../store/db';
 import { addRule, deleteRule, suggestRules, checkRulePrecision, type RuleSuggestion } from '../core/categorize';
 import { categoryNames } from '../core/categories';
@@ -54,7 +54,7 @@ export const rulesView: View = {
         toast(`Added · ${retagged} retagged`, 'ok');
       },
     });
-    return db.onChange(draw);
+    return db.onChange(deferWhileTyping(root, draw));
   },
 };
 

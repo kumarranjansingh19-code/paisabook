@@ -55,6 +55,8 @@ function buildAccount(a: NewAccount): Account {
 }
 
 export async function addAccount(a: NewAccount): Promise<Account> {
+  const twin = sameCardOrAccount(a.kind, a.account_ref ?? '');
+  if (twin) return twin;
   const rec = buildAccount(a);
   await db.append(db.accounts, [rec]);
   return rec;
@@ -62,9 +64,54 @@ export async function addAccount(a: NewAccount): Promise<Account> {
 
 /** Several at once = one sheet write (the wizard's "Add selected"). */
 export async function addAccounts(list: NewAccount[]): Promise<Account[]> {
-  const recs = list.map(buildAccount);
-  await db.append(db.accounts, recs);
+  const recs = list.filter((a) => !sameCardOrAccount(a.kind, a.account_ref ?? '')).map(buildAccount);
+  if (recs.length) await db.append(db.accounts, recs);
   return recs;
+}
+
+const last4s = (ref: string): string[] => (ref.match(/\d{4,}/g) ?? []).map((d) => d.slice(-4));
+
+/**
+ * The same card seen under two names — a statement says "RuPay Card XX4396",
+ * the alerts say "Edge Credit Card XX4396" — is one account: same kind, same
+ * masked number. Institution names differ too often to be part of the key.
+ */
+export function sameCardOrAccount(kind: AccountKind, ref: string): Account | undefined {
+  const mine = last4s(ref);
+  if (!mine.length) return undefined;
+  return db.activeAccounts().find((a) => a.kind === kind && last4s(a.account_ref).some((l4) => mine.includes(l4)));
+}
+
+/**
+ * Fold accounts that share a kind and masked number into one: the one with
+ * statements (else the older one) survives, its twin's rows move over and the
+ * twin is deactivated. Returns the number of accounts merged away.
+ */
+export async function mergeDuplicateAccounts(): Promise<number> {
+  const accs = [...db.activeAccounts()].sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
+  const hasStatements = new Set(db.statements.rows.filter((s) => s.status !== 'failed' && s.status !== 'superseded').map((s) => s.account_id));
+  const merged = new Set<string>();
+  let n = 0;
+  for (let i = 0; i < accs.length; i++) {
+    const a = accs[i]!;
+    if (merged.has(a.id)) continue;
+    for (let j = i + 1; j < accs.length; j++) {
+      const b = accs[j]!;
+      if (merged.has(b.id) || b.kind !== a.kind) continue;
+      const shared = last4s(a.account_ref).some((l4) => last4s(b.account_ref).includes(l4));
+      if (!shared) continue;
+      const [keep, drop] = hasStatements.has(b.id) && !hasStatements.has(a.id) ? [b, a] : [a, b];
+      for (const t of db.transactions.rows) if (t.account_id === drop.id) db.update(db.transactions, t.id, { account_id: keep.id });
+      for (const s of db.statements.rows) if (s.account_id === drop.id) db.update(db.statements, s.id, { account_id: keep.id });
+      const refs = [...new Set([...keep.account_ref.split('/'), ...drop.account_ref.split('/')].map((r) => r.trim()).filter(Boolean))];
+      db.update(db.accounts, keep.id, { account_ref: refs.join(' / ') });
+      db.update(db.accounts, drop.id, { is_active: false, display_name: `(merged) ${drop.display_name}` });
+      merged.add(drop.id);
+      n++;
+    }
+  }
+  if (n) await db.flush();
+  return n;
 }
 
 /** "The Federal Bank Ltd." → "Federal Bank"; "STATE BANK OF INDIA" → "SBI"; "HDFC BANK LIMITED" → "HDFC Bank". */

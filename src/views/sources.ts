@@ -1,5 +1,5 @@
 import type { View } from '../app/router';
-import { html, raw, onAction, toast, modal, spinner, confirmDialog } from '../app/ui';
+import { html, raw, onAction, toast, modal, spinner, confirmDialog, deferWhileTyping } from '../app/ui';
 import { db, type Source } from '../store/db';
 import { addSource, applyMapping, importSource, listTabs, previewRows, proposeMapping } from '../core/sources';
 import { addAccount } from '../core/accounts';
@@ -36,7 +36,7 @@ export const sourcesView: View = {
         draw();
       },
     });
-    return db.onChange(draw);
+    return db.onChange(deferWhileTyping(root, draw));
   },
 };
 

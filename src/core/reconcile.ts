@@ -30,7 +30,22 @@ const FUZZY_WINDOW_DAYS = 2;
  * inside the period with no counterpart are flagged for review.
  * Writes are queued on db; caller flushes. Returns the rows to append.
  */
-export async function reconcile(
+let reconcileChain: Promise<unknown> = Promise.resolve();
+export function reconcile(
+  accountId: string,
+  sourceId: string,
+  source: TxnSource,
+  txns: IncomingTxn[],
+  period: { start: string | null; end: string | null },
+): Promise<ReconcileResult> {
+  // Statement imports run a few at a time; two overlapping statements of one
+  // account must not reconcile against the same snapshot or both insert.
+  const run = reconcileChain.then(() => reconcileNow(accountId, sourceId, source, txns, period));
+  reconcileChain = run.catch(() => undefined);
+  return run;
+}
+
+async function reconcileNow(
   accountId: string,
   sourceId: string,
   source: TxnSource,
@@ -175,14 +190,22 @@ export async function matchAlertsToStatements(): Promise<number> {
   const stmtRows = live.filter((t) => t.source === 'statement' && t.status === 'confirmed');
   const used = new Set<string>();
   let n = 0;
-  const alerts = live.filter((a) => a.source === 'email_alert' && (a.status === 'provisional' || a.status === 'needs_review') && !!a.account_id);
+  const alerts = live.filter((a) => a.source === 'email_alert' && (a.status === 'provisional' || a.status === 'needs_review' || a.status === 'unmatched'));
+  const withStatements = new Set(stmtRows.map((r) => r.account_id));
+  // An alert on an account that has never produced a statement (a UPI id
+  // mistaken for an account, a merchant receipt naming a card we don't know)
+  // may live in another account's statement: allow that when the narration
+  // agrees, or when it is the only same-day candidate for that exact amount.
+  const crossOk = (a: Transaction, r: Transaction) =>
+    similarNarration(r.narration, a.narration) ||
+    (r.posted_at === a.posted_at && stmtRows.filter((x) => x.amount_paise === a.amount_paise && x.direction === a.direction && x.posted_at === a.posted_at).length === 1);
   const find = (a: Transaction, tolerant: boolean) =>
-    stmtRows.find(
+    [...stmtRows.filter((r) => r.account_id === a.account_id), ...stmtRows.filter((r) => r.account_id !== a.account_id)].find(
       (r) =>
         !used.has(r.id) &&
-        r.account_id === a.account_id &&
         r.direction === a.direction &&
         Math.abs(daysBetween(r.posted_at, a.posted_at)) <= FUZZY_WINDOW_DAYS &&
+        (r.account_id === a.account_id ? true : !tolerant && !withStatements.has(a.account_id) && crossOk(a, r)) &&
         (tolerant ? r.amount_paise !== a.amount_paise && nearAmount(r.amount_paise, a.amount_paise) && similarNarration(r.narration, a.narration) : r.amount_paise === a.amount_paise),
     );
   // exact amounts first (so a tolerant match never steals a row that has an exact twin), then near-amount + same merchant
@@ -227,10 +250,69 @@ export function isJunkNarration(n: string): boolean {
 
 /** "URBAN COMPANY LIMITED" ~ "URBANCOMPANY": one contains the other once spaces/punctuation are gone. */
 export function similarNarration(a: string, b: string): boolean {
-  const na = normalizeNarration(a).replace(/\s+/g, '');
-  const nb = normalizeNarration(b).replace(/\s+/g, '');
+  const na = squash(a);
+  const nb = squash(b);
   if (na.length < 4 || nb.length < 4) return false;
-  return na.includes(nb) || nb.includes(na) || na.slice(0, 8) === nb.slice(0, 8);
+  return na.includes(nb) || nb.includes(na) || na.slice(0, 8) === nb.slice(0, 8) || wrappedPrefix(na, nb);
+}
+
+/** Letters and digits only; a PDF's soft line-wrap hyphen ("gp-") is dropped first. */
+const squash = (s: string): string => normalizeNarration(s.replace(/-\s*/g, '')).replace(/\s+/g, '');
+
+/** "UPIOUT/XXXX5562/gp-" (cut by a page wrap) against "UPIOUT/XXXX5562/gpay-utility@okpayaxis". */
+function wrappedPrefix(na: string, nb: string): boolean {
+  let p = 0;
+  while (p < na.length && p < nb.length && na[p] === nb[p]) p++;
+  return p >= 12 && p >= 0.6 * Math.min(na.length, nb.length);
+}
+
+/**
+ * Stricter than similarNarration: the same text, allowing for a line wrap.
+ * Used where amount and day already agree, so a shared "UPIOUT/" prefix must
+ * not fold two genuinely separate payments together.
+ */
+export function sameNarration(a: string, b: string): boolean {
+  const na = squash(a);
+  const nb = squash(b);
+  if (!na || !nb) return na === nb;
+  return na === nb || wrappedPrefix(na, nb);
+}
+
+/**
+ * Two statements covering the same days (the bank's own PDF and an app's
+ * monthly one) present each transaction twice. Keep the row from the earlier
+ * import; supersede the twin. Same account, amount, direction and day, and the
+ * same narration once line-wraps are ignored.
+ */
+export async function dedupeStatementRows(): Promise<number> {
+  const rows = db
+    .liveTransactions()
+    .filter((t) => t.source === 'statement' && t.status === 'confirmed')
+    .sort((a, b) => (a.posted_at < b.posted_at ? -1 : a.posted_at > b.posted_at ? 1 : a.created_at < b.created_at ? -1 : 1));
+  const gone = new Set<string>();
+  let n = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const a = rows[i]!;
+    if (gone.has(a.id)) continue;
+    for (let j = i + 1; j < rows.length; j++) {
+      const b = rows[j]!;
+      if (b.posted_at !== a.posted_at) break;
+      if (gone.has(b.id) || b.account_id !== a.account_id || b.amount_paise !== a.amount_paise || b.direction !== a.direction) continue;
+      if (!b.statement_id || b.statement_id === a.statement_id) continue;
+      if (!sameNarration(a.narration, b.narration)) continue;
+      const patch: Partial<Transaction> = {};
+      if (b.narration.length > a.narration.length + 3) patch.narration = b.narration; // the un-wrapped text
+      if (!a.ref_no && b.ref_no) patch.ref_no = b.ref_no;
+      if (!a.category && b.category) Object.assign(patch, { category: b.category, merchant: b.merchant, categorized_by: b.categorized_by });
+      if (Object.keys(patch).length) db.update(db.transactions, a.id, patch);
+      db.update(db.transactions, b.id, { status: 'superseded' });
+      gone.add(b.id);
+      n++;
+      break;
+    }
+  }
+  if (n) await db.flush();
+  return n;
 }
 
 /**

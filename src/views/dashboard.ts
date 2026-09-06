@@ -1,5 +1,5 @@
 import type { View } from '../app/router';
-import { html, raw, money, onAction, catLabel, pct, toast } from '../app/ui';
+import { html, raw, money, onAction, catLabel, pct, toast, deferWhileTyping } from '../app/ui';
 import { db } from '../store/db';
 import { availableMonths, inMonth, monthlyCashflow, settlement, spendByAccount, spendByCategory, topMerchants, upcomingBills } from '../core/analytics';
 import { addMonths, daysAgoIso, monthLabel, monthOf, todayIso } from '../core/dates';
@@ -48,7 +48,7 @@ export const dashboardView: View = {
       const line = root.querySelector('.month-nav');
       if (line) draw();
     });
-    const offDb = db.onChange(draw);
+    const offDb = db.onChange(deferWhileTyping(root, draw));
     return () => {
       offSync();
       offDb();
