@@ -4,7 +4,7 @@ import { db, newId, stamp, type Account, type AccountKind } from '../store/db';
  * Best-effort account match from text seen in an alert or statement.
  * Kind-aware: a hint mentioning "credit card"/"card" prefers card accounts
  * (so "SBI Credit Card" never lands on SBI Savings), and vice versa.
- * account_ref may hold several masked numbers ("XX1987 / XX5218") since alerts
+ * account_ref may hold several masked numbers ("XX3375 / XX6690") since alerts
  * and statements sometimes mask the same card differently.
  */
 export function matchAccount(text: string, kindHint?: 'bank' | 'credit_card' | 'unknown'): Account | undefined {
@@ -111,7 +111,7 @@ export async function autoCreateFromUnmatched(): Promise<Account[]> {
   return created;
 }
 
-/** "Axis Bank Credit Card XX8194" → "Axis Bank"; "YES BANK credit card XX1568" → "YES BANK". */
+/** "Axis Bank Credit Card XX9127" → "Axis Bank"; "YES BANK credit card XX2210" → "YES BANK". */
 export function institutionFromHint(hint: string): string {
   const m = /^(.*?)\s*(?:credit card|debit card|card|a\/c|account|acct|savings|current|xx|\*+|ending|no\.?)\b/i.exec(hint) ?? /^([A-Za-z][A-Za-z .&]{1,30}?)\s*(?=X|\*|\d)/.exec(hint);
   const inst = (m ? m[1]! : hint).replace(/[^A-Za-z .&]/g, '').trim();

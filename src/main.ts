@@ -24,6 +24,35 @@ const updateSW = registerSW({
   },
 });
 
+/**
+ * Install prompt: Chrome/Edge/Android fire `beforeinstallprompt`; we keep the
+ * event and offer a button from the first screen. iOS has no event, so the
+ * shell shows the Share → Add to Home Screen hint instead.
+ */
+type InstallEvent = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: string }> };
+let installEvent: InstallEvent | null = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  installEvent = e as InstallEvent;
+  document.dispatchEvent(new Event('paisabook:installable'));
+});
+window.addEventListener('appinstalled', () => {
+  installEvent = null;
+  document.dispatchEvent(new Event('paisabook:installable'));
+});
+export function canPromptInstall(): boolean {
+  return !!installEvent;
+}
+export async function promptInstall(): Promise<boolean> {
+  if (!installEvent) return false;
+  await installEvent.prompt();
+  const { outcome } = await installEvent.userChoice;
+  installEvent = null;
+  return outcome === 'accepted';
+}
+(window as unknown as { paisabookInstall: () => Promise<boolean>; paisabookCanInstall: () => boolean }).paisabookInstall = promptInstall;
+(window as unknown as { paisabookInstall: () => Promise<boolean>; paisabookCanInstall: () => boolean }).paisabookCanInstall = canPromptInstall;
+
 /** Hard refresh: drop every cache and service worker, then reload. Exposed for the More page. */
 export async function clearCachesAndReload(): Promise<void> {
   try {

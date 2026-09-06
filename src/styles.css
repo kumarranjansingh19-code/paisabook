@@ -173,3 +173,8 @@ details summary { cursor: pointer; font-weight: 600; }
 .filters > * { width: auto; flex: 1 1 120px; }
 .month-nav { display: flex; align-items: center; gap: .5rem; margin-bottom: .75rem; }
 .month-nav h2 { flex: 1; text-align: center; margin: 0; }
+
+/* install prompt */
+.install-bar { display: flex; align-items: center; gap: .6rem; padding: .55rem 1rem; background: var(--accent-soft); color: var(--text); font-size: .85rem; border-bottom: 1px solid var(--line); }
+.install-bar span { flex: 1; }
+@media (min-width: 860px) { .install-bar { margin-left: 180px; } }

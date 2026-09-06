@@ -51,7 +51,7 @@ export const emailBatchSchema: JsonSchema = {
             type: 'object',
             description: 'filled only when kind = cc_bill_notice or cc_statement and the body states amounts',
             properties: {
-              card_hint: str('issuer + masked card number, e.g. "Axis Bank XX8194"'),
+              card_hint: str('issuer + masked card number, e.g. "Axis Bank XX9127"'),
               total_due: str('total amount due exactly as written, else empty'),
               min_due: str('minimum due as written, else empty'),
               due_date: isoDateOrEmpty('payment due date'),

@@ -78,11 +78,11 @@ const WINDOW = 260;
 const AMOUNT_RE = /(?:Rs\.?|INR|₹)\s*(\d[\d,]*(?:\.\d{1,2})?)|(\d[\d,]*(?:\.\d{1,2})?)\s*(?:Rs\.?|INR)\b/gi;
 const BALANCE_CONTEXT = /(?:bal(?:ance)?|limit|lmt|available|avl|avail|outstanding|total due|min(?:imum)? due|due amount)[^\d]{0,25}$/i;
 /**
- * A masked account/card number: needs a masking marker (XX1234, **1234, X2452,
+ * A masked account/card number: needs a masking marker (XX1234, **1234, X7310,
  * "ending 1234", "ending with 1234") — never a bare 4-digit number.
  */
 const LAST4_RE = /(?:ending(?: with| in)?|last (?:four|4)(?: digits)?)\s*[:\-]?\s*(?:x+|\*+|•+)?\s*(\d{4,})\b|(?:\b(?:x{1,}|\*{2,}|•{2,})[\s-]?|(?:^|[^A-Za-z0-9])(?:x{1,}|\*{2,}|•{2,})(?:\s?-\s?|\s)?)(\d{4,})\b(?![\d,.]*(?:%|\.\d))/i;
-/** The digits after a mask can be longer than 4 (SBI prints XXXXX092452): keep the last four. */
+/** The digits after a mask can be longer than 4 (SBI prints XXXXX097310): keep the last four. */
 function last4Of(m: RegExpExecArray | RegExpMatchArray | null): string {
   const d = m ? (m[1] ?? m[2] ?? '') : '';
   return d.slice(-4);

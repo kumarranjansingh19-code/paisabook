@@ -113,7 +113,7 @@ const STEP_HTML: Record<Step, () => string> = {
   accounts: () => html`<div class="card">
       <h2>4. Your accounts</h2>
       <p class="muted">PaisaBook will scan the last 60 days of mail and propose the bank accounts and cards it sees. Tick the ones that are yours. You can add more later under Accounts.</p>
-      <label class="field">Your name as it appears in bank transfers (so money you move between your own accounts isn't counted as spending) <input name="selfName" placeholder="e.g. Ranjan Kumar Singh" /></label>
+      <label class="field">Your name as it appears in bank transfers (so money you move between your own accounts isn't counted as spending) <input name="selfName" placeholder="e.g. Asha Verma" /></label>
       <div class="row">
         <button class="btn primary" data-action="discover">Scan my mail for accounts</button>
         <button class="btn ghost" data-action="skip-accounts">Skip, I'll add them manually</button>
