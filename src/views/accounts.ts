@@ -1,7 +1,7 @@
 import type { View } from '../app/router';
-import { html, raw, money, onAction, modal, toast, spinner, confirmDialog, deferWhileTyping } from '../app/ui';
+import { html, raw, money, onAction, modal, toast, spinner, confirmDialog, deferWhileTyping, mdOptions } from '../app/ui';
 import { db, type Account } from '../store/db';
-import { addAccount, deleteAccount, ignoreHint, ignoredHints, rehomeUnmatched, restoreHint, unmatchedHints, updateAccount } from '../core/accounts';
+import { addAccount, deleteAccount, ignoreAllHints, ignoreHint, ignoredHints, mergeAccounts, rehomeUnmatched, restoreHint, unmatchedHints, updateAccount } from '../core/accounts';
 import { settings, saveSettings } from '../store/local';
 import { escapeHtml } from '../core/text';
 import { scanMailbox } from '../core/extract';
@@ -84,6 +84,14 @@ export const accountsView: View = {
         const n = await ignoreHint(hint);
         toast(`${n} alerts hidden`, 'ok');
       },
+      'ignore-all-hints': async () => {
+        const hints = unmatchedHints();
+        const alerts = hints.reduce((n, h) => n + h.count, 0);
+        if (!(await confirmDialog(`Ignore all ${hints.length} unknown accounts? ${alerts} alerts are hidden and these hints are skipped in future syncs. You can restore any of them later.`, 'Ignore all'))) return;
+        const r = await ignoreAllHints();
+        toast(`${r.hints} hints ignored · ${r.alerts} alerts hidden`, 'ok');
+      },
+      merge: (el) => mergeDialog(el.dataset.id!),
       'restore-hint': async (el) => {
         const n = await restoreHint(el.dataset.key!);
         toast(`${n} alerts restored`, 'ok');
@@ -104,6 +112,7 @@ export const accountsView: View = {
 
 function page(): string {
   const accs = db.accounts.rows;
+  const activeCount = accs.filter((a) => a.is_active).length;
   const hints = unmatchedHints();
   const ignored = ignoredHints();
   const pw = settings().passwords;
@@ -114,7 +123,7 @@ function page(): string {
   return html`
     <div class="row between"><h2>Accounts</h2><md-filled-button data-action="add">+ Add</md-filled-button></div>
     ${hints.length
-      ? raw(`<div class="card warn"><h3>Alerts for unknown accounts</h3><p class="small muted">These masked numbers appear in alerts but match none of your accounts. Add the account and the alerts attach automatically.</p>
+      ? raw(`<div class="card warn"><div class="row between"><h3>Alerts for unknown accounts</h3>${hints.length > 1 ? `<md-text-button data-small data-action="ignore-all-hints" title="None of these are my accounts — hide all their alerts and skip these hints from now on">Ignore all</md-text-button>` : ''}</div><p class="small muted">These masked numbers appear in alerts but match none of your accounts. Add the account and the alerts attach automatically.</p>
         ${hints.map((h) => `<div class="list-item"><div class="grow"><div class="title">${escapeHtml(h.hint)}</div><div class="sub">${h.count} alerts · last ${h.last}</div></div><md-outlined-button data-small data-action="add-from-hint" data-hint="${escapeHtml(h.hint)}">Add account</md-outlined-button><md-text-button data-small data-action="ignore-hint" data-hint="${escapeHtml(h.hint)}" title="Not my account — hide these alerts and skip this hint from now on">Ignore</md-text-button></div>`).join('')}</div>`)
       : ''}
     ${ignored.length
@@ -130,6 +139,7 @@ function page(): string {
           </div>
           <md-outlined-button data-small data-action="password" data-id="${a.id}" title="Statement PDF password">🔑</md-outlined-button>
           <md-outlined-button data-small data-action="edit" data-id="${a.id}">Edit</md-outlined-button>
+          ${a.is_active && activeCount > 1 ? `<md-outlined-button data-small data-action="merge" data-id="${a.id}" title="Same account under two names? Fold another account into this one">Merge</md-outlined-button>` : ''}
           ${txnCount(a.id) === 0 && stmtCount(a.id) === 0 ? `<md-text-button data-small class="danger" data-action="delete" data-id="${a.id}">Delete</md-text-button>` : a.is_active ? `<md-text-button data-small data-action="deactivate" data-id="${a.id}" title="Keeps its rows in the sheet but removes them from every number">Hide</md-text-button>` : `<md-outlined-button data-small data-action="activate" data-id="${a.id}">Show</md-outlined-button>`}
         </div>`,
       )
@@ -164,6 +174,30 @@ async function editDialog(id: string): Promise<void> {
   await updateAccount(id, { kind: r.kind as Account['kind'], institution: r.institution!, display_name: r.display_name || a.display_name, account_ref: r.account_ref ?? '', statement_sender: r.statement_sender ?? '', password_hint: r.password_hint ?? '' });
   const n = await rehomeUnmatched();
   toast(`Saved${n ? ` · ${n} alerts attached` : ''}`, 'ok');
+}
+
+/**
+ * "These two are the same account": pick which other account folds into
+ * `keepId`. Same-kind accounts are listed first since that is the usual case
+ * (a card seen under two names), but any account can be chosen.
+ */
+async function mergeDialog(keepId: string): Promise<void> {
+  const keep = db.accounts.get(keepId);
+  if (!keep) return;
+  const others = db.activeAccounts().filter((a) => a.id !== keepId).sort((a, b) => Number(a.kind !== keep.kind) - Number(b.kind !== keep.kind) || a.display_name.localeCompare(b.display_name));
+  if (!others.length) return toast('No other account to merge', 'error');
+  const txns = (id: string) => db.transactions.rows.filter((t) => t.account_id === id && t.status !== 'superseded').length;
+  const r = await modal(
+    `<p class="small muted">Everything from the account you pick — transactions, statements, masked numbers, PDF password — moves into <b>${escapeHtml(keep.display_name)}</b>, and the picked account is hidden as "(merged)". Undo by editing the hidden account back to Show and moving rows manually, so double-check.</p>
+     <md-outlined-select class="field" label="Merge this account into it" name="drop" required>${mdOptions(others.map((a) => ({ value: a.id, label: `${a.display_name} · ${a.kind.replace('_', ' ')} · ${a.account_ref || 'no masked number'} · ${txns(a.id)} txns` })), others[0]!.id)}</md-outlined-select>`,
+    { title: `Merge into ${keep.display_name}`, submit: 'Merge' },
+  );
+  if (!r?.drop) return;
+  const drop = db.accounts.get(r.drop);
+  if (!drop) return;
+  if (!(await confirmDialog(`Merge "${drop.display_name}" into "${keep.display_name}"? ${txns(drop.id)} transactions move over and "${drop.display_name}" is hidden.`, 'Merge'))) return;
+  const moved = await mergeAccounts(keep.id, drop.id);
+  toast(`Merged · ${moved} transactions moved to ${keep.display_name}`, 'ok');
 }
 
 async function passwordDialog(id: string): Promise<void> {

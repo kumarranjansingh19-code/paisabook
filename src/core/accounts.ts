@@ -1,4 +1,5 @@
 import { db, newId, stamp, type Account, type AccountKind } from '../store/db';
+import { settings, saveSettings } from '../store/local';
 
 /**
  * Best-effort account match from text seen in an alert or statement.
@@ -83,6 +84,42 @@ export function sameCardOrAccount(kind: AccountKind, ref: string): Account | und
 }
 
 /**
+ * Move everything that points at `drop` onto `keep` and retire `drop`:
+ * transactions, statements and sheet sources are re-pointed, masked numbers
+ * and the statement sender are unioned, the PDF password (device-only) is
+ * carried over if `keep` has none. Writes are queued; caller flushes.
+ */
+function foldInto(keep: Account, drop: Account): void {
+  for (const t of db.transactions.rows) if (t.account_id === drop.id) db.update(db.transactions, t.id, { account_id: keep.id });
+  for (const s of db.statements.rows) if (s.account_id === drop.id) db.update(db.statements, s.id, { account_id: keep.id });
+  for (const s of db.sources.rows) if (s.account_id === drop.id) db.update(db.sources, s.id, { account_id: keep.id });
+  const refs = [...new Set([...keep.account_ref.split('/'), ...drop.account_ref.split('/')].map((r) => r.trim()).filter(Boolean))];
+  db.update(db.accounts, keep.id, {
+    account_ref: refs.join(' / '),
+    statement_sender: keep.statement_sender || drop.statement_sender,
+    password_hint: keep.password_hint || drop.password_hint,
+  });
+  db.update(db.accounts, drop.id, { is_active: false, display_name: `(merged) ${drop.display_name}` });
+  const pw = settings().passwords;
+  if (pw[drop.id] && !pw[keep.id]) saveSettings({ passwords: { ...pw, [keep.id]: pw[drop.id]! } });
+}
+
+/**
+ * User-driven merge: "these two are the same account". `keepId` survives,
+ * `dropId`'s rows move over and it is hidden. Returns how many transactions
+ * moved. Any kinds allowed — the user knows better than the heuristics.
+ */
+export async function mergeAccounts(keepId: string, dropId: string): Promise<number> {
+  const keep = db.accounts.get(keepId);
+  const drop = db.accounts.get(dropId);
+  if (!keep || !drop || keep.id === drop.id) return 0;
+  const moved = db.transactions.rows.filter((t) => t.account_id === drop.id).length;
+  foldInto(keep, drop);
+  await db.flush();
+  return moved;
+}
+
+/**
  * Fold accounts that share a kind and masked number into one: the one with
  * statements (else the older one) survives, its twin's rows move over and the
  * twin is deactivated. Returns the number of accounts merged away.
@@ -101,11 +138,7 @@ export async function mergeDuplicateAccounts(): Promise<number> {
       const shared = last4s(a.account_ref).some((l4) => last4s(b.account_ref).includes(l4));
       if (!shared) continue;
       const [keep, drop] = hasStatements.has(b.id) && !hasStatements.has(a.id) ? [b, a] : [a, b];
-      for (const t of db.transactions.rows) if (t.account_id === drop.id) db.update(db.transactions, t.id, { account_id: keep.id });
-      for (const s of db.statements.rows) if (s.account_id === drop.id) db.update(db.statements, s.id, { account_id: keep.id });
-      const refs = [...new Set([...keep.account_ref.split('/'), ...drop.account_ref.split('/')].map((r) => r.trim()).filter(Boolean))];
-      db.update(db.accounts, keep.id, { account_ref: refs.join(' / ') });
-      db.update(db.accounts, drop.id, { is_active: false, display_name: `(merged) ${drop.display_name}` });
+      foldInto(keep, drop);
       merged.add(drop.id);
       n++;
     }
@@ -234,6 +267,26 @@ export async function ignoreHint(hint: string): Promise<number> {
   }
   await db.flush();
   return n;
+}
+
+/** "None of these are mine": ignore every unmatched hint in one go. */
+export async function ignoreAllHints(): Promise<{ hints: number; alerts: number }> {
+  const keys = new Set(ignoredHints());
+  let hints = 0;
+  let alerts = 0;
+  for (const t of db.transactions.rows) {
+    if (t.status !== 'unmatched') continue;
+    const k = hintKey(t.account_hint);
+    if (k && !keys.has(k)) {
+      keys.add(k);
+      hints++;
+    }
+    db.update(db.transactions, t.id, { status: 'superseded' });
+    alerts++;
+  }
+  if (hints) await db.setSetting(IGNORED_KEY, JSON.stringify([...keys]));
+  if (alerts) await db.flush();
+  return { hints, alerts };
 }
 
 export async function restoreHint(k: string): Promise<number> {
