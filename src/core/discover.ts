@@ -4,7 +4,7 @@ import type { FetchedEmail } from '../google/gmail';
 import { db } from '../store/db';
 import { chunk, mapPool } from './pool';
 import { emailAddress, redactPii } from './text';
-import { instKey } from './accounts';
+import { instKey, allRefs } from './accounts';
 import { discoverHeuristically } from './heuristics';
 
 export interface AccountProposal {
@@ -68,7 +68,7 @@ export async function discoverAccounts(emails: FetchedEmail[], signal?: AbortSig
     .filter(
       (p) =>
         !existing.some((a) => {
-          const refs = (a.account_ref.match(/\d{2,}/g) ?? []).map((d) => d.slice(-4));
+          const refs = (allRefs(a).match(/\d{2,}/g) ?? []).map((d) => d.slice(-4));
           if (p.last4 && refs.some((r) => r.endsWith(p.last4) || p.last4.endsWith(r))) return true;
           return a.kind === p.kind && instKey(a.institution) === instKey(p.institution) && (!p.last4 || !a.account_ref);
         }),

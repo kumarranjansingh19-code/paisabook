@@ -1,7 +1,7 @@
 import type { View } from '../app/router';
 import { html, raw, money, onAction, modal, toast, spinner, confirmDialog, deferWhileTyping, mdOptions } from '../app/ui';
 import { db, type Account } from '../store/db';
-import { addAccount, deleteAccount, ignoreAllHints, ignoreHint, ignoredHints, mergeAccounts, rehomeUnmatched, restoreHint, unmatchedHints, updateAccount } from '../core/accounts';
+import { addAccount, addonEntries, attachAddonCard, deleteAccount, ignoreAllHints, ignoreHint, ignoredHints, mergeAccounts, rehomeUnmatched, restoreHint, unmatchedHints, updateAccount } from '../core/accounts';
 import { settings, saveSettings } from '../store/local';
 import { escapeHtml } from '../core/text';
 import { scanMailbox } from '../core/extract';
@@ -78,6 +78,21 @@ export const accountsView: View = {
         const r = await deleteAccount(a.id);
         toast(r === 'deleted' ? 'Deleted' : 'This account has data — hide it instead', r === 'deleted' ? 'ok' : 'error');
       },
+      'addon-from-hint': async (el) => {
+        const hint = el.dataset.hint!;
+        const cards = db.activeAccounts().filter((a) => a.kind === 'credit_card');
+        if (!cards.length) return toast('Add the primary credit card first', 'error');
+        const r = await modal(
+          `<p class="small muted">Alerts for <b>${escapeHtml(hint)}</b> will attach to the card you pick, and its statement lines will match those alerts. The holder name shows on each transaction.</p>
+           <md-outlined-select class="field" label="Primary card" name="primary" required>${mdOptions(cards.map((a) => ({ value: a.id, label: `${a.display_name} · ${a.account_ref || 'no masked number'}` })), cards[0]!.id)}</md-outlined-select>
+           <md-outlined-text-field class="field" label="Card holder (optional)" name="holder" placeholder="Priyanka"></md-outlined-text-field>`,
+          { title: 'Add-on card of…', submit: 'Attach' },
+        );
+        if (!r?.primary) return;
+        const n = await attachAddonCard(r.primary, hint, r.holder ?? '');
+        toast(`Add-on card recorded · ${n} alerts attached`, 'ok');
+        if (n) categorizeAll().catch(() => {});
+      },
       'ignore-hint': async (el) => {
         const hint = el.dataset.hint!;
         if (!(await confirmDialog(`Ignore "${hint}"? Its alerts are hidden and future ones are skipped. You can restore it later.`, 'Ignore'))) return;
@@ -113,6 +128,7 @@ export const accountsView: View = {
 function page(): string {
   const accs = db.accounts.rows;
   const activeCount = accs.filter((a) => a.is_active).length;
+  const hasCard = accs.some((a) => a.is_active && a.kind === 'credit_card');
   const hints = unmatchedHints();
   const ignored = ignoredHints();
   const pw = settings().passwords;
@@ -124,7 +140,7 @@ function page(): string {
     <div class="row between"><h2>Accounts</h2><md-filled-button data-action="add">+ Add</md-filled-button></div>
     ${hints.length
       ? raw(`<div class="card warn"><div class="row between"><h3>Alerts for unknown accounts</h3>${hints.length > 1 ? `<md-text-button data-small data-action="ignore-all-hints" title="None of these are my accounts — hide all their alerts and skip these hints from now on">Ignore all</md-text-button>` : ''}</div><p class="small muted">These masked numbers appear in alerts but match none of your accounts. Add the account and the alerts attach automatically.</p>
-        ${hints.map((h) => `<div class="list-item"><div class="grow"><div class="title">${escapeHtml(h.hint)}</div><div class="sub">${h.count} alerts · last ${h.last}</div></div><md-outlined-button data-small data-action="add-from-hint" data-hint="${escapeHtml(h.hint)}">Add account</md-outlined-button><md-text-button data-small data-action="ignore-hint" data-hint="${escapeHtml(h.hint)}" title="Not my account — hide these alerts and skip this hint from now on">Ignore</md-text-button></div>`).join('')}</div>`)
+        ${hints.map((h) => `<div class="list-item"><div class="grow"><div class="title">${escapeHtml(h.hint)}</div><div class="sub">${h.count} alerts · last ${h.last}</div></div><md-outlined-button data-small data-action="add-from-hint" data-hint="${escapeHtml(h.hint)}">Add account</md-outlined-button>${hasCard && /\d{4}/.test(h.hint) ? `<md-outlined-button data-small data-action="addon-from-hint" data-hint="${escapeHtml(h.hint)}" title="This is a supplementary card billed to one of my cards">Add-on of…</md-outlined-button>` : ''}<md-text-button data-small data-action="ignore-hint" data-hint="${escapeHtml(h.hint)}" title="Not my account — hide these alerts and skip this hint from now on">Ignore</md-text-button></div>`).join('')}</div>`)
       : ''}
     ${ignored.length
       ? raw(`<details class="card small"><summary>Ignored hints (${ignored.length})</summary><p class="muted">Alerts mentioning these are skipped. Restore one to see its alerts again.</p>
@@ -135,7 +151,7 @@ function page(): string {
         (a) => `<div class="list-item" style="opacity:${a.is_active ? 1 : 0.5}">
           <div class="grow">
             <div class="title">${escapeHtml(a.display_name)} <span class="pill muted">${a.kind.replace('_', ' ')}</span> ${pw[a.id] ? '<span class="pill ok">🔑 password saved</span>' : a.kind !== 'cash' && a.kind !== 'wallet' ? '<span class="pill warn">no PDF password</span>' : ''}</div>
-            <div class="sub">${escapeHtml(a.account_ref || 'no masked number')}${a.statement_sender ? ` · statements from ${escapeHtml(a.statement_sender)}` : ''} · ${txnCount(a.id)} txns · ${stmtCount(a.id)} statements · this month ${money(balanceish(a.id), true)}</div>
+            <div class="sub">${escapeHtml(a.account_ref || 'no masked number')}${addonEntries(a).length ? ` · add-on ${addonEntries(a).map((e) => `XX${e.last4}${e.holder ? ` (${escapeHtml(e.holder)})` : ''}`).join(', ')}` : ''}${a.statement_sender ? ` · statements from ${escapeHtml(a.statement_sender)}` : ''} · ${txnCount(a.id)} txns · ${stmtCount(a.id)} statements · this month ${money(balanceish(a.id), true)}</div>
           </div>
           <md-outlined-button data-small data-action="password" data-id="${a.id}" title="Statement PDF password">🔑</md-outlined-button>
           <md-outlined-button data-small data-action="edit" data-id="${a.id}">Edit</md-outlined-button>
@@ -154,6 +170,7 @@ function accountForm(a: Partial<Account>): string {
     <md-outlined-text-field class="field" label="Institution" name="institution" value="${escapeHtml(a.institution ?? '')}" placeholder="HDFC Bank" required></md-outlined-text-field>
     <md-outlined-text-field class="field" label="Display name (optional)" name="display_name" value="${escapeHtml(a.display_name ?? '')}"></md-outlined-text-field>
     <md-outlined-text-field class="field" label="Masked numbers seen in alerts / statements" name="account_ref" value="${escapeHtml(a.account_ref ?? '')}" placeholder="XX1234 / XX5678"></md-outlined-text-field>
+    <md-outlined-text-field class="field" label="Add-on card numbers (optional)" name="addon_refs" value="${escapeHtml(a.addon_refs ?? '')}" placeholder="XX5678 (Priyanka) / XX9012"></md-outlined-text-field>
     <md-outlined-text-field class="field" label="Statement sender email (optional)" name="statement_sender" value="${escapeHtml(a.statement_sender ?? '')}" placeholder="estatement@hdfcbank.net"></md-outlined-text-field>
     <md-outlined-text-field class="field" label="Password hint (for you)" name="password_hint" value="${escapeHtml(a.password_hint ?? '')}" placeholder="DOB ddmmyyyy + last 4 of mobile"></md-outlined-text-field>`;
 }
@@ -171,7 +188,7 @@ async function editDialog(id: string): Promise<void> {
   if (!a) return;
   const r = await modal(accountForm(a), { title: 'Edit account' });
   if (!r) return;
-  await updateAccount(id, { kind: r.kind as Account['kind'], institution: r.institution!, display_name: r.display_name || a.display_name, account_ref: r.account_ref ?? '', statement_sender: r.statement_sender ?? '', password_hint: r.password_hint ?? '' });
+  await updateAccount(id, { kind: r.kind as Account['kind'], institution: r.institution!, display_name: r.display_name || a.display_name, account_ref: r.account_ref ?? '', addon_refs: r.addon_refs ?? '', statement_sender: r.statement_sender ?? '', password_hint: r.password_hint ?? '' });
   const n = await rehomeUnmatched();
   toast(`Saved${n ? ` · ${n} alerts attached` : ''}`, 'ok');
 }
@@ -189,15 +206,25 @@ async function mergeDialog(keepId: string): Promise<void> {
   const txns = (id: string) => db.transactions.rows.filter((t) => t.account_id === id && t.status !== 'superseded').length;
   const r = await modal(
     `<p class="small muted">Everything from the account you pick — transactions, statements, masked numbers, PDF password — moves into <b>${escapeHtml(keep.display_name)}</b>, and the picked account is hidden as "(merged)". Undo by editing the hidden account back to Show and moving rows manually, so double-check.</p>
-     <md-outlined-select class="field" label="Merge this account into it" name="drop" required>${mdOptions(others.map((a) => ({ value: a.id, label: `${a.display_name} · ${a.kind.replace('_', ' ')} · ${a.account_ref || 'no masked number'} · ${txns(a.id)} txns` })), others[0]!.id)}</md-outlined-select>`,
+     <md-outlined-select class="field" label="Merge this account into it" name="drop" required>${mdOptions(others.map((a) => ({ value: a.id, label: `${a.display_name} · ${a.kind.replace('_', ' ')} · ${a.account_ref || 'no masked number'} · ${txns(a.id)} txns` })), others[0]!.id)}</md-outlined-select>
+     <md-outlined-select class="field" label="How are they related?" name="how">${mdOptions(
+       [
+         { value: 'same', label: 'Same account seen under two names' },
+         { value: 'addon', label: keep.kind === 'credit_card' ? `Add-on card billed to ${keep.display_name}` : 'Add-on / supplementary card' },
+       ],
+       'same',
+     )}</md-outlined-select>
+     <md-outlined-text-field class="field" label="Add-on card holder (only for add-on)" name="holder" placeholder="Priyanka"></md-outlined-text-field>`,
     { title: `Merge into ${keep.display_name}`, submit: 'Merge' },
   );
   if (!r?.drop) return;
   const drop = db.accounts.get(r.drop);
   if (!drop) return;
-  if (!(await confirmDialog(`Merge "${drop.display_name}" into "${keep.display_name}"? ${txns(drop.id)} transactions move over and "${drop.display_name}" is hidden.`, 'Merge'))) return;
-  const moved = await mergeAccounts(keep.id, drop.id);
-  toast(`Merged · ${moved} transactions moved to ${keep.display_name}`, 'ok');
+  const asAddon = r.how === 'addon';
+  const what = asAddon ? `Record "${drop.display_name}" as an add-on card of "${keep.display_name}"?` : `Merge "${drop.display_name}" into "${keep.display_name}"?`;
+  if (!(await confirmDialog(`${what} ${txns(drop.id)} transactions move over and "${drop.display_name}" is hidden.`, 'Merge'))) return;
+  const moved = await mergeAccounts(keep.id, drop.id, { asAddon, holder: r.holder });
+  toast(`${asAddon ? 'Add-on recorded' : 'Merged'} · ${moved} transactions moved to ${keep.display_name}`, 'ok');
 }
 
 async function passwordDialog(id: string): Promise<void> {

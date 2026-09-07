@@ -15,17 +15,38 @@ export function matchAccount(text: string, kindHint?: 'bank' | 'credit_card' | '
     (a, b) => Number((a.kind === 'credit_card') !== wantsCard) - Number((b.kind === 'credit_card') !== wantsCard),
   );
   for (const a of ordered) {
-    const last4s = (a.account_ref.match(/\d{4,}/g) ?? []).map((d) => d.slice(-4));
-    if (last4s.some((l4) => t.includes(l4))) return a;
+    if (last4s(allRefs(a)).some((l4) => t.includes(l4))) return a;
   }
   const hintDigits = t.match(/\d{4,}/g)?.map((d) => d.slice(-4)) ?? [];
   // Institution-only match is safe only when the hint carries no digits that
   // contradict every account of that institution.
   return ordered.find((a) => {
     if (!t.includes(instKey(a.institution))) return false;
-    const refs = (a.account_ref.match(/\d{4,}/g) ?? []).map((d) => d.slice(-4));
+    const refs = last4s(allRefs(a));
     return hintDigits.length === 0 || refs.length === 0 || hintDigits.some((h) => refs.includes(h));
   });
+}
+
+/** Every masked number that bills to this account: its own plus add-on cards. */
+export const allRefs = (a: Account): string => [a.account_ref, a.addon_refs].filter(Boolean).join(' / ');
+
+const last4s = (ref: string): string[] => (ref.match(/\d{4,}/g) ?? []).map((d) => d.slice(-4));
+
+/** Parsed add-on entries: "XX5678 (Priyanka) / XX9012" → [{last4:'5678', holder:'Priyanka'}, {last4:'9012', holder:''}]. */
+export function addonEntries(a: Pick<Account, 'addon_refs'>): Array<{ last4: string; holder: string }> {
+  return (a.addon_refs ?? '')
+    .split('/')
+    .map((e) => e.trim())
+    .filter(Boolean)
+    .map((e) => ({ last4: e.match(/\d{4,}/)?.[0]?.slice(-4) ?? '', holder: /\(([^)]*)\)/.exec(e)?.[1]?.trim() ?? '' }))
+    .filter((e) => e.last4);
+}
+
+/** Name of the add-on card holder a transaction's hint points at, '' when it is the primary card. */
+export function addonHolderFor(account: Account | undefined, hint: string): string {
+  if (!account?.addon_refs || !hint) return '';
+  const digits = last4s(hint);
+  return addonEntries(account).find((e) => digits.includes(e.last4))?.holder ?? '';
 }
 
 export function instKey(institution: string): string {
@@ -48,6 +69,7 @@ function buildAccount(a: NewAccount): Account {
     institution: normalizeInstitution(a.institution),
     display_name: a.display_name?.trim() || defaultName(a.kind, a.institution, a.account_ref ?? ''),
     account_ref: a.account_ref?.trim() ?? '',
+    addon_refs: '',
     statement_sender: a.statement_sender ?? '',
     password_hint: a.password_hint ?? '',
     is_active: true,
@@ -70,8 +92,6 @@ export async function addAccounts(list: NewAccount[]): Promise<Account[]> {
   return recs;
 }
 
-const last4s = (ref: string): string[] => (ref.match(/\d{4,}/g) ?? []).map((d) => d.slice(-4));
-
 /**
  * The same card seen under two names — a statement says "RuPay Card XX4396",
  * the alerts say "Edge Credit Card XX4396" — is one account: same kind, same
@@ -80,7 +100,7 @@ const last4s = (ref: string): string[] => (ref.match(/\d{4,}/g) ?? []).map((d) =
 export function sameCardOrAccount(kind: AccountKind, ref: string): Account | undefined {
   const mine = last4s(ref);
   if (!mine.length) return undefined;
-  return db.activeAccounts().find((a) => a.kind === kind && last4s(a.account_ref).some((l4) => mine.includes(l4)));
+  return db.activeAccounts().find((a) => a.kind === kind && last4s(allRefs(a)).some((l4) => mine.includes(l4)));
 }
 
 /**
@@ -89,17 +109,25 @@ export function sameCardOrAccount(kind: AccountKind, ref: string): Account | und
  * and the statement sender are unioned, the PDF password (device-only) is
  * carried over if `keep` has none. Writes are queued; caller flushes.
  */
-function foldInto(keep: Account, drop: Account): void {
+function foldInto(keep: Account, drop: Account, addon?: { holder: string }): void {
   for (const t of db.transactions.rows) if (t.account_id === drop.id) db.update(db.transactions, t.id, { account_id: keep.id });
   for (const s of db.statements.rows) if (s.account_id === drop.id) db.update(db.statements, s.id, { account_id: keep.id });
   for (const s of db.sources.rows) if (s.account_id === drop.id) db.update(db.sources, s.id, { account_id: keep.id });
-  const refs = [...new Set([...keep.account_ref.split('/'), ...drop.account_ref.split('/')].map((r) => r.trim()).filter(Boolean))];
-  db.update(db.accounts, keep.id, {
-    account_ref: refs.join(' / '),
+  const joinRefs = (...lists: string[]) => [...new Set(lists.flatMap((l) => l.split('/')).map((r) => r.trim()).filter(Boolean))].join(' / ');
+  const patch: Partial<Account> = {
     statement_sender: keep.statement_sender || drop.statement_sender,
     password_hint: keep.password_hint || drop.password_hint,
-  });
-  db.update(db.accounts, drop.id, { is_active: false, display_name: `(merged) ${drop.display_name}` });
+  };
+  if (addon) {
+    // An add-on card keeps its own number, tagged with the holder, so its alerts still land here and stay attributable.
+    const tagged = last4s(drop.account_ref).map((l4) => `XX${l4}${addon.holder ? ` (${addon.holder})` : ''}`).join(' / ');
+    patch.addon_refs = joinRefs(keep.addon_refs, tagged, drop.addon_refs);
+  } else {
+    patch.account_ref = joinRefs(keep.account_ref, drop.account_ref);
+    patch.addon_refs = joinRefs(keep.addon_refs, drop.addon_refs);
+  }
+  db.update(db.accounts, keep.id, patch);
+  db.update(db.accounts, drop.id, { is_active: false, display_name: `(${addon ? 'add-on' : 'merged'}) ${drop.display_name}` });
   const pw = settings().passwords;
   if (pw[drop.id] && !pw[keep.id]) saveSettings({ passwords: { ...pw, [keep.id]: pw[drop.id]! } });
 }
@@ -109,12 +137,12 @@ function foldInto(keep: Account, drop: Account): void {
  * `dropId`'s rows move over and it is hidden. Returns how many transactions
  * moved. Any kinds allowed — the user knows better than the heuristics.
  */
-export async function mergeAccounts(keepId: string, dropId: string): Promise<number> {
+export async function mergeAccounts(keepId: string, dropId: string, opts: { asAddon?: boolean; holder?: string } = {}): Promise<number> {
   const keep = db.accounts.get(keepId);
   const drop = db.accounts.get(dropId);
   if (!keep || !drop || keep.id === drop.id) return 0;
   const moved = db.transactions.rows.filter((t) => t.account_id === drop.id).length;
-  foldInto(keep, drop);
+  foldInto(keep, drop, opts.asAddon ? { holder: opts.holder?.trim() ?? '' } : undefined);
   await db.flush();
   return moved;
 }
@@ -135,7 +163,7 @@ export async function mergeDuplicateAccounts(): Promise<number> {
     for (let j = i + 1; j < accs.length; j++) {
       const b = accs[j]!;
       if (merged.has(b.id) || b.kind !== a.kind) continue;
-      const shared = last4s(a.account_ref).some((l4) => last4s(b.account_ref).includes(l4));
+      const shared = last4s(allRefs(a)).some((l4) => last4s(allRefs(b)).includes(l4));
       if (!shared) continue;
       const [keep, drop] = hasStatements.has(b.id) && !hasStatements.has(a.id) ? [b, a] : [a, b];
       foldInto(keep, drop);
@@ -180,6 +208,22 @@ export async function deleteAccount(id: string): Promise<'deleted' | 'has_data'>
 export async function updateAccount(id: string, patch: Partial<Account>): Promise<void> {
   db.update(db.accounts, id, patch);
   await db.flush();
+}
+
+/**
+ * "That unknown card is an add-on of my card": record its masked number on the
+ * primary account (tagged with the holder) and attach the waiting alerts.
+ * Returns how many alerts were attached.
+ */
+export async function attachAddonCard(primaryId: string, hint: string, holder = ''): Promise<number> {
+  const primary = db.accounts.get(primaryId);
+  const l4 = last4s(hint);
+  if (!primary || !l4.length) return 0;
+  const have = new Set(last4s(allRefs(primary)));
+  const fresh = l4.filter((d) => !have.has(d)).map((d) => `XX${d}${holder.trim() ? ` (${holder.trim()})` : ''}`);
+  if (fresh.length) db.update(db.accounts, primary.id, { addon_refs: [primary.addon_refs, ...fresh].filter(Boolean).join(' / ') });
+  await db.flush();
+  return rehomeUnmatched();
 }
 
 /**

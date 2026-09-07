@@ -3,6 +3,7 @@ import { generateJson } from '../llm/gemini';
 import { categorizationSchema, ruleSuggestSchema, type CategorizationResult, type RuleSuggestResult } from '../llm/schemas';
 import { categoryNames, categoryPromptBlock, withCategoryEnum } from './categories';
 import { ruleNorm } from './fingerprint';
+import { normalizePattern, patternMatches } from './rulematch';
 import { formatPaise } from './money';
 import { chunk } from './pool';
 import { daysBetween } from './dates';
@@ -10,7 +11,7 @@ import { daysBetween } from './dates';
 const BATCH_SIZE = 40;
 
 function ruleMatches(rule: Rule, narration: string): boolean {
-  return ruleNorm(narration).includes(rule.pattern);
+  return patternMatches(rule.pattern, narration);
 }
 
 /** Deterministic rules first; they also override earlier LLM guesses, never user picks. */
@@ -217,7 +218,7 @@ export async function categorizeAll(onProgress?: CategorizeProgress, signal?: Ab
 export function checkRulePrecision(pattern: string, category: string): { total: number; same: number; userClash: number; precision: number } {
   let total = 0, same = 0, userClash = 0;
   for (const t of db.liveTransactions()) {
-    if (!ruleNorm(t.narration).includes(pattern)) continue;
+    if (!patternMatches(pattern, t.narration)) continue;
     total++;
     if (t.category === category) same++;
     if (t.categorized_by === 'user' && t.category && t.category !== category) userClash++;
@@ -258,13 +259,35 @@ export function promoteStablePatterns(): Rule[] {
 }
 
 export async function addRule(pattern: string, category: string, merchant: string, source: Rule['source'] = 'user'): Promise<{ rule: Rule; retagged: number }> {
-  const frag = pattern.toLowerCase().replace(/%/g, '').replace(/[-\s]/g, '');
-  if (frag.length < 3) throw new Error('Pattern too short');
+  const frag = normalizePattern(pattern);
   const rule: Rule = { id: newId('rule'), pattern: frag, category, merchant: merchant.trim(), source, created_at: stamp() };
   await db.append(db.rules, [rule]);
   const retagged = applyRules();
   await db.flush();
   return { rule, retagged };
+}
+
+/**
+ * Change a rule's conditions or outcome. Transactions the old version had
+ * tagged and that no rule matches any more go back to uncategorized so the
+ * next AI pass reconsiders them; everything else is re-tagged by applyRules.
+ */
+export async function updateRule(id: string, pattern: string, category: string, merchant: string): Promise<{ retagged: number; released: number }> {
+  const old = db.rules.get(id);
+  if (!old) throw new Error('Rule not found');
+  const frag = normalizePattern(pattern);
+  db.update(db.rules, id, { pattern: frag, category, merchant: merchant.trim(), source: 'user' });
+  let released = 0;
+  for (const t of db.transactions.rows) {
+    if (t.status === 'superseded' || t.categorized_by !== 'rule' || t.category !== old.category) continue;
+    if (!patternMatches(old.pattern, t.narration) || patternMatches(frag, t.narration)) continue;
+    if (db.rules.rows.some((r) => r.pattern && ruleMatches(r, t.narration))) continue;
+    db.update(db.transactions, t.id, { category: '', merchant: '', categorized_by: '' });
+    released++;
+  }
+  const retagged = applyRules();
+  await db.flush();
+  return { retagged, released };
 }
 
 /** Rules are never deleted from the sheet — they're blanked so row numbers stay stable. */

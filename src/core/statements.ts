@@ -3,7 +3,7 @@ import { generateJson } from '../llm/gemini';
 import { statementSchema, type StatementExtract } from '../llm/schemas';
 import { extractPdfText, PdfPasswordError } from './pdf';
 import { reconcile, type IncomingTxn } from './reconcile';
-import { addAccount, instKey, matchAccount } from './accounts';
+import { addAccount, instKey, matchAccount, allRefs } from './accounts';
 import { parseAmountToPaise } from './money';
 import { emailAddress, redactPii } from './text';
 import { sha256HexAsync } from './hash';
@@ -175,7 +175,7 @@ export async function importStatement(
     saveSettings({ passwords: { ...settings().passwords, [account.id]: guessedPassword } });
   }
   // Learn masked numbers we haven't seen for this account.
-  const newRefs = (extract.account_hint.match(/\d{4,}/g) ?? []).map((d) => d.slice(-4)).filter((l4) => !account.account_ref.includes(l4));
+  const newRefs = (extract.account_hint.match(/\d{4,}/g) ?? []).map((d) => d.slice(-4)).filter((l4) => !allRefs(account).includes(l4));
   if (newRefs.length && account.account_ref) db.update(db.accounts, account.id, { account_ref: `${account.account_ref} / ${newRefs.map((r) => `XX${r}`).join(' / ')}` });
   else if (newRefs.length) db.update(db.accounts, account.id, { account_ref: newRefs.map((r) => `XX${r}`).join(' / ') });
 

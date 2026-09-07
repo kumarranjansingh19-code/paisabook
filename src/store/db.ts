@@ -19,6 +19,8 @@ export interface Account {
   display_name: string;
   /** masked numbers seen for this account, e.g. "XX1234 / XX5678" */
   account_ref: string;
+  /** add-on / supplementary cards billed to this account: "XX5678 (Priyanka) / XX9012" */
+  addon_refs: string;
   statement_sender: string;
   password_hint: string;
   is_active: boolean;
@@ -166,7 +168,7 @@ interface TableDef<T extends object> {
 export const TABLES = {
   accounts: {
     name: 'accounts',
-    columns: ['id', 'kind', 'institution', 'display_name', 'account_ref', 'statement_sender', 'password_hint', 'is_active', 'created_at'],
+    columns: ['id', 'kind', 'institution', 'display_name', 'account_ref', 'addon_refs', 'statement_sender', 'password_hint', 'is_active', 'created_at'],
     boolean: ['is_active'],
   } satisfies TableDef<Account>,
   transactions: {

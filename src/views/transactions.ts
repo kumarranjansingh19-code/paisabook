@@ -9,6 +9,7 @@ import { escapeHtml } from '../core/text';
 import { txnFingerprint } from '../core/fingerprint';
 import { parseAmountToPaise } from '../core/money';
 import { stamp } from '../store/db';
+import { addonHolderFor } from '../core/accounts';
 
 interface Filter {
   m: string;
@@ -21,6 +22,8 @@ interface Filter {
 }
 const DEFAULTS = (): Filter => ({ m: monthOf(todayIso()), cat: '', acc: '', status: '', q: '', kind: '' });
 const f: Filter = DEFAULTS();
+
+const holderOf = (t: Transaction): string => addonHolderFor(db.accounts.get(t.account_id), t.account_hint);
 
 export const transactionsView: View = {
   title: 'Ledger',
@@ -105,7 +108,7 @@ function list_(): string {
         <div class="amt ${t.direction}">${t.direction === 'credit' ? '+' : '−'}${money(t.amount_paise)}</div>
         <div class="meta">
           <span>${t.posted_at}</span>
-          <span>${escapeHtml(db.accounts.get(t.account_id)?.display_name ?? t.account_hint ?? '?')}</span>
+          <span>${escapeHtml(db.accounts.get(t.account_id)?.display_name ?? t.account_hint ?? '?')}${holderOf(t) ? ` <span class="pill muted" title="add-on card">${escapeHtml(holderOf(t))}</span>` : ''}</span>
           ${statusPill(t)}
           <select class="inline" data-cat="${t.id}">${categoryOptions(t.category, categoryNames())}</select>
         </div></div>`,
@@ -131,7 +134,7 @@ async function openTxn(id: string): Promise<void> {
   const acc = db.accounts.get(t.account_id);
   const r = await modal(
     `<p><strong>${escapeHtml(t.narration)}</strong></p>
-     <p class="muted small">${t.posted_at} · ${escapeHtml(acc?.display_name ?? t.account_hint)} · ${t.direction} ${money(t.amount_paise)}${t.ref_no ? ` · ref ${escapeHtml(t.ref_no)}` : ''}<br/>
+     <p class="muted small">${t.posted_at} · ${escapeHtml(acc?.display_name ?? t.account_hint)}${holderOf(t) ? ` (${escapeHtml(holderOf(t))}'s add-on card)` : ''} · ${t.direction} ${money(t.amount_paise)}${t.ref_no ? ` · ref ${escapeHtml(t.ref_no)}` : ''}<br/>
      source ${t.source} · status ${t.status} · categorized by ${t.categorized_by || '—'}</p>
      <md-outlined-select class="field" label="Category" name="category">${mdCategoryOptions(t.category, categoryNames())}</md-outlined-select>
      <md-outlined-text-field class="field" label="Merchant" name="merchant" value="${escapeHtml(t.merchant)}"></md-outlined-text-field>
